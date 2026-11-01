@@ -2,22 +2,25 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import {randomUUID,timingSafeEqual,randomBytes} from 'node:crypto';
-import {config,saveConfig,dataRoot,runs,runPipeline} from './runtime.js';
+import {randomUUID,timingSafeEqual,randomBytes,createHash} from 'node:crypto';
+import {config,saveConfig,dataRoot,runs,runPipeline,planCompression} from './runtime.js';
 export const name='collaborative-compaction';
 export const inject=['webServer','llm'];
 const route='/dsh-collaborative-compaction';
-const biliFile=path.join(os.homedir(),'.config/billion-context/billion-context.json');
+export function engineConfigFile(){return process.env.BILI_CONFIG_FILE?path.resolve(process.env.BILI_CONFIG_FILE):path.join(process.env.XDG_CONFIG_HOME?path.resolve(process.env.XDG_CONFIG_HOME):path.join(os.homedir(),'.config'),'billion-context','billion-context.json');}
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 function write(p,v){fs.mkdirSync(path.dirname(p),{recursive:true});const t=p+'.'+randomUUID()+'.tmp';fs.writeFileSync(t,JSON.stringify(v,null,2),{mode:0o600});fs.renameSync(t,p);}
 export function syncEngine(c,port,token){
- const old=fs.existsSync(biliFile)?read(biliFile):{},backup=path.join(dataRoot,'engine-before.json');
+ const biliFile=engineConfigFile(),old=fs.existsSync(biliFile)?read(biliFile):{};
+ const backup=path.join(dataRoot,'engine-before-'+createHash('sha256').update(biliFile).digest('hex').slice(0,16)+'.json');
+ const legacy=path.join(dataRoot,'engine-before.json');
+ if(!fs.existsSync(backup)&&!process.env.BILI_CONFIG_FILE&&!process.env.XDG_CONFIG_HOME&&fs.existsSync(legacy))write(backup,read(legacy));
  if(!fs.existsSync(backup))write(backup,{compress:old.compress||{},provider:old.providers?.['dsh-collaborative']||null});
  const saved=read(backup);old.compress||={};old.providers||={};
  if(c.enabled){
   const credentials=biliFile+'.summary-credentials.json',keys=fs.existsSync(credentials)?read(credentials):{};keys['dsh-collaborative']=token;write(credentials,keys);
   old.providers['dsh-collaborative']={baseUrl:`http://127.0.0.1:${port}/v1`,api:'openai',credentialRef:'dsh-collaborative',models:{'dsh-collaborative-v1':{contextWindow:1000000,outputTokens:c.outputTokens,stream:false}}};
-  Object.assign(old.compress,{externalSummary:{enabled:true,targets:['dsh-collaborative/dsh-collaborative-v1'],budget:{totalTimeoutMs:c.timeoutMs+20000,targetTimeoutMs:c.timeoutMs+10000,maxSummaryBytes:c.maxSummaryChars*4+4096},concurrency:1,autoFold:true,autoFoldTargetTokens:c.autoFoldTargetTokens},preserveRecentTokens:c.preserveRecentTokens,maxSummaryLength:c.maxSummaryChars});
+  Object.assign(old.compress,{externalSummary:{enabled:true,targets:['dsh-collaborative/dsh-collaborative-v1'],budget:{totalTimeoutMs:c.timeoutMs+20000,targetTimeoutMs:c.timeoutMs+10000,maxSummaryBytes:c.maxSummaryChars*4+4096},concurrency:1,modelPlanning:c.plannerEnabled,autoFold:true,autoFoldTargetTokens:c.autoFoldTargetTokens},preserveRecentTokens:c.preserveRecentTokens,maxSummaryLength:c.maxSummaryChars});
  }else{
   for(const k of ['externalSummary','preserveRecentTokens','maxSummaryLength'])if(k in saved.compress)old.compress[k]=saved.compress[k];else delete old.compress[k];
   if(saved.provider)old.providers['dsh-collaborative']=saved.provider;else delete old.providers['dsh-collaborative'];
@@ -40,9 +43,9 @@ export function apply(ctx){
  }
  const server=http.createServer(async(req,res)=>{
   const supplied=Buffer.from(req.headers.authorization||''),expected=Buffer.from('Bearer '+token);
-  if(req.method!=='POST'||req.url!=='/v1/chat/completions'||supplied.length!==expected.length||!timingSafeEqual(supplied,expected)||req.headers.origin){reply(res,403,{error:'Forbidden'});return;}
+  if(req.method!=='POST'||!['/v1/chat/completions','/v1/plan'].includes(req.url)||supplied.length!==expected.length||!timingSafeEqual(supplied,expected)||req.headers.origin){reply(res,403,{error:'Forbidden'});return;}
   const abort=new AbortController();pending.add(abort);res.on('close',()=>{if(!res.writableEnded)abort.abort();});
-  try{const payload=await body(req),c=config();if(!c.enabled)throw Error('Plugin disabled; reload compression configuration');if(payload.model!=='dsh-collaborative-v1')throw Error('Unsupported protocol model');
+  try{const payload=await body(req),c=config();if(!c.enabled)throw Error('Plugin disabled; reload compression configuration');if(req.url==='/v1/plan'){reply(res,200,await planCompression(payload,{settings:c,signal:abort.signal}));return;}if(payload.model!=='dsh-collaborative-v1')throw Error('Unsupported protocol model');
    const text=payload.messages?.findLast(x=>x.role==='user')?.content,instructions=payload.messages?.filter(x=>x.role==='system').map(x=>x.content).join('\n');
    const source=JSON.parse(text);if(typeof source.content!=='string'||!source.content.trim())throw Error('Missing frozen history');
    const max=Number(instructions?.match(/AT MOST (\d+) characters/)?.[1])||c.maxSummaryChars;
