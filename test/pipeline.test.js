@@ -39,13 +39,13 @@ test('independent fact verification rejects fabricated evidence',async()=>{
 
 test('literal guard rejects invented dates paths identifiers while allowing paraphrase',async()=>{
  const {validateLiterals}=await import('../runtime.js');
- const source='预算1200，日期2026-11-05，路径 C:\\work\\file.json，使用 model_name 与 USD。';
+ const source='预算1200 USD，日期2026-11-05，路径 C:\\work\\file.json，使用 model_name 与 USD。';
  assert.doesNotThrow(()=>validateLiterals('使用 model_name；预算1200 USD。',source));
  for(const summary of ['预算1300','日期2026-05-11','日期2026-11-06','路径 C:\\other\\file.json','使用 other_name'])assert.throws(()=>validateLiterals(summary,source),/Unanchored/);
 });
 test('Chinese token estimate is not UTF8 byte count and stage caps are independent',async()=>{
  const {estimatedTokens}=await import('../runtime.js');const chinese='今天下雨，我在整理旧书。'.repeat(5000);
- assert.ok(estimatedTokens(chinese)<Buffer.byteLength(chinese)*0.7);
+ assert.ok(await estimatedTokens(chinese)<Buffer.byteLength(chinese)*0.7);
  const calls=[];await runPipeline(work,async()=>result,{settings:c,transport:transport(calls)});
  assert.equal(calls[0].body.max_tokens,c.claudeOutputTokens);assert.equal(calls[1].body.max_output_tokens,c.reviewOutputTokens);
 });
@@ -72,4 +72,13 @@ test('run retention prunes old files and reads only latest hundred',async()=>{
 test('legacy saved verifier model retains its OpenAI provider on upgrade',()=>{
  const file=path.join(process.env.DSH_COLLAB_TEST_HOME,'config.json');fs.writeFileSync(file,JSON.stringify({verificationModel:'gpt-6.1-terra'}));
  try{assert.equal(config().verificationProvider,'openai');}finally{fs.unlinkSync(file);}
+});
+
+test('numbered lists and soft counts/acronyms do not reject ordinary summaries',async()=>{
+ const {validateLiterals}=await import('../runtime.js');const source='交付11月5日，预算1200元。更正了日期和预算。';
+ assert.doesNotThrow(()=>validateLiterals('1. 交付11月5日。\n2、预算1200元。',source));
+ const warnings=validateLiterals('AI 助手共做了2次更正。',source);assert.equal(warnings.softLiteralWarnings,2);
+ assert.throws(()=>validateLiterals('预算5元。',source),/Unanchored/);
+ assert.throws(()=>validateLiterals('1.5万元。',source),/Unanchored/);
+ assert.throws(()=>validateLiterals('交付11月6日。',source),/Unanchored/);
 });
