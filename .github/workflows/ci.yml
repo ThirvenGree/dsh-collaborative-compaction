@@ -15,6 +15,7 @@ jobs:
           node-version: '22'
       - run: node --check host.js
       - run: node --check client.js
+      - run: npm ci --ignore-scripts
       - run: npm test
   engine-patch:
     runs-on: ubuntu-latest

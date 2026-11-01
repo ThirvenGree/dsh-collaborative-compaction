@@ -13,9 +13,10 @@ function write(p,v){fs.mkdirSync(path.dirname(p),{recursive:true});const t=p+'.'
 export function syncEngine(c,port,token){
  const biliFile=engineConfigFile(),old=fs.existsSync(biliFile)?read(biliFile):{};
  const backup=path.join(dataRoot,'engine-before-'+createHash('sha256').update(biliFile).digest('hex').slice(0,16)+'.json');
- const legacy=path.join(dataRoot,'engine-before.json');
- if(!fs.existsSync(backup)&&!process.env.BILI_CONFIG_FILE&&!process.env.XDG_CONFIG_HOME&&fs.existsSync(legacy))write(backup,read(legacy));
- if(!fs.existsSync(backup))write(backup,{compress:old.compress||{},provider:old.providers?.['dsh-collaborative']||null});
+ const owned=old.compress?.externalSummary?.targets?.some(t=>typeof t==='string'&&t.endsWith('/dsh-collaborative-v1'))===true;
+ if(!c.enabled&&!owned)return;
+ if(c.enabled&&!owned)write(backup,{compress:old.compress||{},provider:old.providers?.['dsh-collaborative']||null});
+ if(!fs.existsSync(backup))throw Error('Owned engine configuration has no restore snapshot');
  const saved=read(backup);old.compress||={};old.providers||={};
  if(c.enabled){
   const credentials=biliFile+'.summary-credentials.json',keys=fs.existsSync(credentials)?read(credentials):{};keys['dsh-collaborative']=token;write(credentials,keys);
@@ -27,7 +28,8 @@ export function syncEngine(c,port,token){
  }
  write(biliFile,old);
 }
-async function body(req){let s='';for await(const p of req){s+=p;if(s.length>3000000)throw Error('Request too large');}return JSON.parse(s);}
+export async function body(req,limit=9_000_000){const chunks=[];let n=0;for await(const part of req){const p=Buffer.isBuffer(part)?part:Buffer.from(part);n+=p.length;if(n>limit)throw Error('Request too large');chunks.push(p);}return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,n)));}
+
 function reply(res,status,data){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data));}
 export function apply(ctx){
  fs.mkdirSync(dataRoot,{recursive:true});let token;const tokenFile=path.join(dataRoot,'local-token');if(fs.existsSync(tokenFile))token=fs.readFileSync(tokenFile,'utf8');else{token=randomBytes(32).toString('hex');fs.writeFileSync(tokenFile,token,{mode:0o600});}
@@ -48,7 +50,8 @@ export function apply(ctx){
   try{const payload=await body(req),c=config();if(!c.enabled)throw Error('Plugin disabled; reload compression configuration');if(req.url==='/v1/plan'){reply(res,200,await planCompression(payload,{settings:c,signal:abort.signal}));return;}if(payload.model!=='dsh-collaborative-v1')throw Error('Unsupported protocol model');
    const text=payload.messages?.findLast(x=>x.role==='user')?.content,instructions=payload.messages?.filter(x=>x.role==='system').map(x=>x.content).join('\n');
    const source=JSON.parse(text);if(typeof source.content!=='string'||!source.content.trim())throw Error('Missing frozen history');
-   const max=Number(instructions?.match(/AT MOST (\d+) characters/)?.[1])||c.maxSummaryChars;
+   const max=payload.metadata?.dsh_compaction?.maxSummaryChars;
+   if(payload.metadata?.dsh_compaction?.version!==1||!Number.isSafeInteger(max)||max<1)throw Error('Missing structured summary budget; update the billion-context adapter');
    const work={content:source.content,reference:source.reference,instructions:instructions||'',maxSummaryChars:Math.min(max,c.maxSummaryChars)};
    const summary=await runPipeline(work,sig=>generateA(work,sig,c),{signal:abort.signal,settings:c});reply(res,200,{choices:[{message:{role:'assistant',content:summary},finish_reason:'stop'}]});
   }catch(e){reply(res,422,{error:String(e.message).slice(0,250)});}finally{pending.delete(abort);}
