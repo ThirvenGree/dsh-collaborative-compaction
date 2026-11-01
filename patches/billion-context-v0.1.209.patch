@@ -1,0 +1,396 @@
+diff --git a/reference/architecture.md b/reference/architecture.md
+index acbbd53..e25793a 100644
+--- a/reference/architecture.md
++++ b/reference/architecture.md
+@@ -9,6 +9,7 @@
+ billion-context/
+ ├── src/
+ │   ├── index.ts                  # Entry point: runs cli.ts main()
++│   ├── collaborative-transaction.ts # Local DSH collaboration: staged commit, revision guard and original block evidence
+ │   ├── cli.ts                    # CLI dispatcher: start/update/export/test/plugin + client launcher
+ │   ├── server.ts                 # HTTP proxy server, request pipeline (hot file — §7.2)
+ │   ├── server/                   # Server-side support modules
+diff --git a/src/agent/dsh-native.ts b/src/agent/dsh-native.ts
+index 779ec5f..81bc458 100644
+--- a/src/agent/dsh-native.ts
++++ b/src/agent/dsh-native.ts
+@@ -57,7 +57,7 @@ import { ensureProxyRunning, LAUNCHER_DEFAULT_HOST, requestInstanceShutdown } fr
+ import { isVersionNewer } from "../update.js";
+ import { VERSION } from "../version.js";
+ import { APIG_RESIGN_SCHEME, unresolvedRefusals } from "../apig-resign.js";
+-import { adminRelayEnabled, resolveResignSettings } from "../config.js";
++import { adminRelayEnabled, resolveResignSettings, loadConfigFile } from "../config.js";
+ import { decodeRequestBody } from "../content-encoding.js";
+ import { dshContextTabEnabled, dshContextTabLabel, limitsDecodedBytes } from "../knobs.js";
+ import { MIN_ASSUMED_WINDOW_TOKENS } from "../util.js";
+@@ -2678,6 +2678,29 @@ export function apply(ctx: PluginContext): void {
+         description: "Prompt-cache reconciliation (same report as the acp_cache tool)",
+         handler: (invocation) => cacheOutcome(ctx, invocation),
+     });
++    ctx.commands.register({
++        name: "compact",
++        description: "Compress eligible history through the configured ACP summary and review transaction",
++        handler: async (invocation) => {
++            const base = register.base;
++            const sid = invocationSidOf(invocation);
++            if (!base || !sid) return { kind: "error", text: "Compression needs the current session and a connected ACP proxy." };
++            const chain = loadConfigFile()?.compress?.externalSummary;
++            if (!chain?.enabled) return { kind: "error", text: "Independent compression is disabled. Continue with the existing compress tool, or enable collaborative compression in settings." };
++            try {
++                const status = await fetchStatus(base, sid);
++                const candidates = status?.compressibleRanges;
++                if (!Array.isArray(candidates)) return { kind: "error", text: "No current eligible history snapshot. Send a conversation turn first." };
++                const ranges = candidates.filter((item: { tokens?: unknown }) => typeof item.tokens === "number" && item.tokens > 0)
++                    .map((item: { startRef?: unknown; endRef?: unknown }) => ({ startId: item.startRef, endId: item.endRef }));
++                if (ranges.length === 0) return { kind: "success", text: "No eligible history outside the protected recent region; nothing changed." };
++                const result = await forwardTool(base, sid, "compress", { content: ranges }, invocation?.signal, true);
++                return { kind: result.failed ? "error" : "success", text: result.text };
++            } catch {
++                return { kind: "error", text: "Collaborative compression failed; originals retained. Check stage diagnostics in settings." };
++            }
++        },
++    });
+ 
+     // node:test drives apply() directly with a mock ctx — never patch
+     // globalThis.fetch from inside a test run.
+diff --git a/src/collaborative-transaction.ts b/src/collaborative-transaction.ts
+new file mode 100644
+index 0000000..7abc0df
+--- /dev/null
++++ b/src/collaborative-transaction.ts
+@@ -0,0 +1,39 @@
++import type { Session } from "./session.js";
++import type { ResolvedKernelConfig } from "./compress-settings.js";
++
++export function collaborativeEnabled(config: unknown): boolean {
++    const ext = (config as ResolvedKernelConfig | undefined)?.externalSummary;
++    return ext?.enabled === true && Array.isArray(ext.targets) && ext.targets.some((target) => target?.model === "dsh-collaborative-v1");
++}
++
++function copy<T>(value: T): T {
++    if (value instanceof Promise || typeof value === "function" || value === null || typeof value !== "object") return value;
++    if (value instanceof Map) return new Map([...value].map(([key, item]) => [key, copy(item)])) as T;
++    if (value instanceof Set) return new Set(value) as T;
++    if (value instanceof Date || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return structuredClone(value);
++    if (Array.isArray(value)) return value.map(copy) as T;
++    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copy(item)])) as T;
++}
++
++/** The live session remains untouched while the existing engine works on its draft. */
++export function compressionDraft(session: Session): { draft: Session; commit(): void } {
++    const state = session.state;
++    const epoch = session.revisionEpoch;
++    const history = JSON.stringify(session.lastMessages);
++    const draft = copy(session);
++    return { draft, commit() {
++        if (session.state !== state || session.revisionEpoch !== epoch || JSON.stringify(session.lastMessages) !== history) {
++            throw new Error("Compression source changed; draft discarded");
++        }
++        const { lockChain, inFlight, lastSeen, ...changes } = draft;
++        void lockChain; void inFlight; void lastSeen;
++        Object.assign(session, changes);
++    } };
++}
++
++export function reviewedBlockSource(session: Session, blockId: string, fallback: string, config: unknown): string {
++    if (!collaborativeEnabled(config)) return fallback;
++    const original = session.blockContents.get(blockId)?.full?.text;
++    if (!original?.trim()) throw new Error("Original block history unavailable; refusing summary-only review");
++    return original;
++}
+diff --git a/src/external-summary-compress.ts b/src/external-summary-compress.ts
+index 24c0d21..f12cca2 100644
+--- a/src/external-summary-compress.ts
++++ b/src/external-summary-compress.ts
+@@ -7,6 +7,7 @@ import { compressResult, type ProxyToolResult } from "./proxy-tool-result.js";
+ import { imagePlaceholders } from "./image-note.js";
+ import { describeExternalSummaryFailure, summaryLengthBudgetClause, type SummaryWork } from "./external-summary.js";
+ import { newExternalCallId } from "./external-summary-marker.js";
++import { collaborativeEnabled, compressionDraft } from "./collaborative-transaction.js";
+ 
+ // Re-exported for callers that historically imported it here; the canonical
+ // home is the leaf module (kept import-graph-light for display surfaces).
+@@ -34,6 +35,19 @@ function withOptionalSummaries(input: unknown): unknown {
+ 
+ /** Called under the host session lock; generation is separate from kernel commit. */
+ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal): Promise<ProxyToolResult> {
++    if (!collaborativeEnabled(ctx.config)) return applyConfiguredCompressionInner(input, ctx, callId, signal);
++    const transaction = compressionDraft(ctx.session);
++    try {
++        const result = await applyConfiguredCompressionInner(input, { ...ctx, session: transaction.draft }, callId, signal);
++        if (result.outcome !== "applied" || signal?.aborted) return compressResult("[Compression FAILED: collaborative batch not fully accepted. Originals retained.]", "refused", 0);
++        transaction.commit();
++        return result;
++    } catch {
++        return compressResult("[Compression FAILED: collaborative generation, validation or source-version check failed. Originals retained.]", "refused", 0);
++    }
++}
++
++async function applyConfiguredCompressionInner(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal): Promise<ProxyToolResult> {
+     if (signal?.aborted) return compressResult("[Compression FAILED: cancelled. Nothing compressed.]", "refused", 0);
+     // The plan rides the request Config rail (#833: ctx.config is the
+     // session's effective Config — same cascade that produced the wire).
+@@ -62,6 +76,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+         return { ...range, summary: (`external-probe-${index}:`).padEnd(length, "x").slice(0, length) };
+     });
+     const preview = ctx.core.applyCompression({ messages, state, config: ctx.config, ranges: probes });
++    if (collaborativeEnabled(ctx.config) && (parsed.diagnostics.invalidItems > 0 || preview.result.errors.length > 0)) return compressResult("[Compression FAILED: one or more selected ranges failed validation; entire batch retained.]", "refused", 0);
+     const before = new Map(state.blocks.map((block) => [block.blockId, block]));
+     const source = messages.map((message) => ({ ...message, text:
+         `[${state.messageRefs.byRaw[message.id] ?? message.id}] ${message.text ?? ""}` }));
+@@ -70,7 +85,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+             && before.get(candidate.blockId)?.summary !== candidate.summary);
+         if (blocks.length === 0) continue;
+         const content = blocks.map((block) => {
+-            const collected = collectBlockContent(state, block, source, { full: false }).text;
++            const collected = collectBlockContent(state, block, source, { full: collaborativeEnabled(ctx.config) }).text;
+             if (collected.trim()) return collected;
+             // An inline-restored block may no longer have originals in the wire view.
+             const cached = ctx.session.blockContents.get(block.blockId);
+@@ -96,6 +111,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+     }
+     if (work.length === 0) return compressResult("[Compression FAILED: no selected range passed the existing kernel protection checks. Nothing compressed.]", "refused", 0);
+     const batch = await plan.summarize(work, signal);
++    if (collaborativeEnabled(ctx.config) && (valid.length !== parsed.ranges.length || batch.results.length !== work.length || batch.results.some((result) => result.status !== "success"))) return compressResult("[Compression FAILED: collaborative batch incomplete; nothing committed.]", "refused", 0);
+     if (signal?.aborted || ctx.session.state !== state || ctx.session.revisionEpoch !== revision) return compressResult("[Compression FAILED: cancelled or session changed while generating external summaries. Nothing compressed.]", "refused", 0);
+     const successful: ParsedRange[] = [];
+     for (const [index, result] of batch.results.entries()) {
+diff --git a/src/external-summary-runtime.ts b/src/external-summary-runtime.ts
+index 56b565b..2347929 100644
+--- a/src/external-summary-runtime.ts
++++ b/src/external-summary-runtime.ts
+@@ -17,6 +17,7 @@ export const _executorForTest = executor;
+ const seenCandidateWarnings = new Set<string>();
+ 
+ export class ConfiguredSummaryPlan {
++    failed = false;
+     private readonly candidates: readonly SummaryCandidate[];
+     private readonly settings: ExternalSummarySettings;
+     /** #2662: summarize() invocations vs candidate calls actually dispatched —
+@@ -68,12 +69,14 @@ export class ConfiguredSummaryPlan {
+     }
+ 
+     async summarize(work: readonly SummaryWork[], signal?: AbortSignal): Promise<ExternalSummaryBatchResult> {
++        if (this.failed && this.settings.targets.some((target) => target.model === "dsh-collaborative-v1")) return { status: "failed", reason: "invalid_plan", results: [] };
+         // Deliberately NO cached deadline here: preflight reuses one plan across
+         // many summarize() calls, so each must get the FULL configured budget —
+         // a construction-time clock point went stale mid-round and starved every
+         // later range (#2639). The model-tool path packs all ranges into one call,
+         // where executeBatch's shared deadline still bounds the whole batch.
+         const batch = await executor.executeBatch(work, this.candidates, { ...this.settings.budget }, signal, { concurrency: this.settings.concurrency });
++        if (batch.results.length !== work.length || batch.results.some((item) => item.status !== "success")) this.failed = true;
+         this.stats.calls += 1;
+         for (const item of batch.results) this.stats.attempts += item.attempts.length;
+         return batch;
+diff --git a/src/external-summary-settings.ts b/src/external-summary-settings.ts
+index 4e02788..77d0471 100644
+--- a/src/external-summary-settings.ts
++++ b/src/external-summary-settings.ts
+@@ -314,6 +314,7 @@ export function expandExternalSummaryChainTolerant(chain: ExternalSummaryChain,
+     try {
+         return expandExternalSummaryChain(chain, recipes);
+     } catch (error) {
++        if (chain.enabled && chain.targets.some((target) => target.endsWith("/dsh-collaborative-v1"))) throw new Error("Collaborative compression configuration is invalid; refusing silent fallback");
+         const message = error instanceof Error ? error.message : String(error);
+         if (!seenExpansionWarnings.has(message)) {
+             seenExpansionWarnings.add(message);
+diff --git a/src/preflight.ts b/src/preflight.ts
+index 0af1155..b440bf2 100644
+--- a/src/preflight.ts
++++ b/src/preflight.ts
+@@ -35,6 +35,7 @@ import { describeExternalSummaryFailure, summaryLengthBudgetClause } from "./ext
+ export { describeExternalSummaryFailure };
+ import type { ResolvedKernelConfig } from "./compress-settings.js";
+ import { newExternalCallId } from "./external-summary-marker.js";
++import { collaborativeEnabled, compressionDraft, reviewedBlockSource } from "./collaborative-transaction.js";
+ 
+ // #247: proactive pre-forward compression. When the session's real context
+ // (previous turn's upstream input_tokens) exceeds the current model's window
+@@ -1480,6 +1481,7 @@ function readDeterministicProbeState(metadata: Record<string, unknown>): Determi
+ // oldest content becomes foldable. The hard protectedTools exclusion is
+ // computed independently of preserveRecent* and still applies.
+ function relaxedConfig(config: Config): Config {
++    if (collaborativeEnabled(config)) return config;
+     return { ...config, preserveRecentMessages: 0, preserveRecentTokens: 0 };
+ }
+ 
+@@ -1615,6 +1617,21 @@ export function deterministicDigest(entries: DigestEntry[], startRef: string, en
+ }
+ 
+ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessage[]): Promise<PreflightResult> {
++    if (!collaborativeEnabled(deps.config)) return preflightCompressInner(deps, messages);
++    const transaction = compressionDraft(deps.session);
++    const plan = deps.externalSummary ?? configuredSummaryPlan((deps.config as ResolvedKernelConfig).externalSummary, deps.session.id);
++    try {
++        const result = await preflightCompressInner({ ...deps, session: transaction.draft, externalSummary: plan }, messages.map((message) => ({ ...message })));
++        if (result.failure || plan?.failed || deps.signal?.aborted) throw new Error("Collaborative preflight did not fully validate");
++        transaction.commit();
++        return result;
++    } catch {
++        return { compressedRanges: 0, savedTokens: 0, payloadEstimate: estimateCoreMessages(messages), rangesRemaining: 0, fitsWindow: false, hadFoldableCandidates: true,
++            failure: { kind: "upstream", detail: "Collaborative compression aborted; original history retained. Check the collaboration settings and stage diagnostics." } };
++    }
++}
++
++async function preflightCompressInner(deps: PreflightDeps, messages: CoreMessage[]): Promise<PreflightResult> {
+     // #3641: epoch confirmation pending — the fold state and the resent
+     // history share nothing (wholesale replacement, no word evidence), so any
+     // fold computed here would summarize a substrate whose anchor set can
+@@ -1807,7 +1824,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+     // digest-fold ordinary payloads (caught by the model-switch e2e: its
+     // summarization calls vanished under a 300k foreign-model baseline).
+     const entryOvershoot = limit > 0 && entryLocal > 0 ? entryLocal / limit : 1;
+-    const emergencyFold = entryOvershoot > EMERGENCY_FOLD_COVERAGE;
++    const emergencyFold = !collaborativeEnabled(deps.config) && entryOvershoot > EMERGENCY_FOLD_COVERAGE;
+     const effectiveRoundCap = emergencyFold ? EMERGENCY_ROUND_CAP : roundBudget;
+     if (emergencyFold) {
+         deps.log("warn", `[preflight] payload ~${entryLocal} tok vs window ${limit} (~${entryOvershoot.toFixed(1)}x) exceeds the LLM fold path's coverage bound (${EMERGENCY_FOLD_COVERAGE}x) — folding with deterministic digests instead of summarization calls; originals stay restorable via decompress (#2383)`);
+@@ -1882,7 +1899,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+                 const cid = m ? cover.get(m.id) : undefined;
+                 if (cid) {
+                     const blk = deps.session.state.blocks.find((x) => x.blockId === cid);
+-                    if (blk) parts.push(`[summarized ${blk.topic ? `${blk.blockId}: ${blk.topic}` : blk.blockId}]\n${blk.summary}`);
++                    if (blk) parts.push(`[summarized ${blk.topic ? `${blk.blockId}: ${blk.topic}` : blk.blockId}]\n${reviewedBlockSource(deps.session, blk.blockId, blk.summary, deps.config)}`);
+                     while (i <= hi) { const mm = messages[i]; if (mm && cover.get(mm.id) === cid) i++; else break; }
+                 } else {
+                     if (m) parts.push(`[${m.role}] ${m.text ?? ""}`);
+@@ -2539,7 +2556,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+                         const nb = deps.session.state.blocks.find((b) => b.blockId === nid);
+                         if (!nb) { droppedParts.push(`child block ${nid} missing from state`); continue; }
+                         const label = nb.topic ? `${nb.blockId}: ${nb.topic}` : nb.blockId;
+-                        parts.push(`[summarized ${label}]\n${nb.summary}`);
++                        parts.push(`[summarized ${label}]\n${reviewedBlockSource(deps.session, nb.blockId, nb.summary, deps.config)}`);
+                     }
+                     if (droppedParts.length > 0) {
+                         deps.log("debug", `[preflight] range ${skipKey}: ${droppedParts.length} part(s) rendered nothing (${droppedParts.slice(0, 3).join("; ")})`);
+@@ -2589,7 +2606,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+                         if (maxSummary <= 0 || candidate.length <= maxSummary) {
+                             return shrinkOk(candidate) ? candidate : undefined;
+                         }
+-                        if (candidate.length < nom.content.length) {
++                        if (!collaborativeEnabled(deps.config) && candidate.length < nom.content.length) {
+                             const rescued = truncateSummaryToLimit(candidate, maxSummary, activeConfig.compress.minSummaryLength);
+                             if (rescued !== null && shrinkOk(rescued)) {
+                                 deps.log("warn", `[preflight] range ${nom.skipKey}: assembled summary ${candidate.length} chars exceeded maxSummaryLength (${maxSummary}); truncated to ${rescued.length} chars`);
+@@ -2812,7 +2829,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+                     // re-expanding it would defeat the compression this fold performs.
+                     if (!nb) { droppedParts.push(`child block ${nid} missing from state`); continue; }
+                     const label = nb.topic ? `${nb.blockId}: ${nb.topic}` : nb.blockId;
+-                    parts.push(`[summarized ${label}]\n${nb.summary}`);
++                    parts.push(`[summarized ${label}]\n${reviewedBlockSource(deps.session, nb.blockId, nb.summary, deps.config)}`);
+                     if (emergencyFold) entries.push({ ref: nb.blockId, label: `summarized ${label}`, text: nb.summary });
+                 }
+                 if (droppedParts.length > 0) {
+@@ -2916,7 +2933,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+                                 } else {
+                                     outcome = { unusable: `assembled summary (~${countText(candidate)} units) does not shrink its range (~${spanUnits} units) — suspected regurgitation` };
+                                 }
+-                            } else if (candidate.length < content.length) {
++                            } else if (!collaborativeEnabled(deps.config) && candidate.length < content.length) {
+                                 const rescued = truncateSummaryToLimit(candidate, maxSummary, activeConfig.compress.minSummaryLength);
+                                 if (rescued !== null && shrinkOk(rescued)) {
+                                     deps.log("warn", `[preflight] range ${skipKey}: assembled summary ${candidate.length} chars exceeded maxSummaryLength (${maxSummary}); truncated to ${rescued.length} chars`);
+diff --git a/src/thirdparty-scan.ts b/src/thirdparty-scan.ts
+index 6fc46fc..57e0c30 100644
+--- a/src/thirdparty-scan.ts
++++ b/src/thirdparty-scan.ts
+@@ -202,6 +202,8 @@ export function isOpencodeAcpEntry(entry: string): boolean {
+ // substring rule: a real compressor ("context-compactor") or a lookalike
+ // ("my-pi-compact-transcript-fork") must still flag. Evidence-backed, one entry at a time.
+ const KNOWN_NON_COMPRESSORS = new Set<string>([
++    // Local model adapter only: ACP remains the sole scheduler and history committer.
++    "dsh-collaborative-compaction",
+     // pi terminal extension: folds tool output / re-lays AssistantMessage rendering,
+     // registers display toggles; README states "changes display only" — no context
+     // replacement or compression handler (#2324).
+diff --git a/tests/collaborative-transaction.test.ts b/tests/collaborative-transaction.test.ts
+new file mode 100644
+index 0000000..585e26f
+--- /dev/null
++++ b/tests/collaborative-transaction.test.ts
+@@ -0,0 +1,44 @@
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import assert from "node:assert/strict";
++import { test } from "node:test";
++import http from "node:http";
++import { once } from "node:events";
++import { createCore, defaultConfig, defaultPrompts, type CoreMessage } from "acp-kernel";
++import { createSession, markDirty } from "../src/session.ts";
++import { collaborativeEnabled, compressionDraft } from "../src/collaborative-transaction.ts";
++import { applyConfiguredCompression } from "../src/external-summary-compress.ts";
++import { preflightCompress } from "../src/preflight.ts";
++import { resolveDecompress } from "../src/decompress-shared.ts";
++import type { ResolvedKernelConfig } from "../src/compress-settings.ts";
++process.env.NODE_ENV = "test";
++process.env.BILI_SESSIONS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "collab-unit-"));
++process.env.COLLAB_FIXTURE_KEY = "fake";
++const SUMMARY = "Delivery is November 5. Budget is 1200 CNY. Do not publish until explicitly approved. The earlier November 3 date is superseded. Implementation is done, validation remains pending. Keep all original records recoverable.";
++const RAW = "Delivery changed from November 3 to November 5. Budget 1200 CNY. Do not publish. Implementation done, validation pending. ".repeat(100);
++async function fixture(fn: (ctx: ReturnType<typeof context>) => Promise<void>, reply: (n: number) => boolean = () => true) {
++    let n = 0;
++    const server = http.createServer((req, res) => { req.resume(); req.on("end", () => {
++        if (!reply(++n)) { res.writeHead(401); res.end("unavailable"); return; }
++        res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ choices: [{ message: { content: SUMMARY }, finish_reason: "stop" }] }));
++    }); });
++    server.listen(0, "127.0.0.1"); await once(server, "listening");
++    try { await fn(context(`http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`)); }
++    finally { server.closeAllConnections(); await new Promise<void>((r) => server.close(() => r())); }
++}
++function context(url: string) {
++    const core = createCore(); const config = defaultConfig(400000) as ResolvedKernelConfig;
++    config.preserveRecentMessages = 0; config.preserveRecentTokens = 0; config.compress.minCompressRange = 100;
++    config.externalSummary = { enabled: true, targets: [{ name: "collaboration", model: "dsh-collaborative-v1", protocol: "openai", url, credentialRef: "env:COLLAB_FIXTURE_KEY", contextWindow: 1000000, outputTokens: 2000, stream: false }], budget: { totalTimeoutMs: 10000, targetTimeoutMs: 9000, maxSummaryBytes: 5000 }, concurrency: 1 };
++    const messages: CoreMessage[] = [{ id: "a", role: "assistant", contentType: "text", text: RAW }, { id: "u", role: "user", contentType: "text", text: "Proceed with validation." }, { id: "b", role: "assistant", contentType: "text", text: RAW }, { id: "latest", role: "user", contentType: "text", text: "Do not deploy." }];
++    const session = createSession("collab-" + Math.random());
++    session.state = core.processTurn({ messages, state: session.state, config, tokenCount: 30000, renderTags: "text-only" }).state;
++    return { core, config, session, messages, log: () => {} };
++}
++function args(ctx: ReturnType<typeof context>) { return { content: ["a", "b"].map(id => ({ startId: ctx.session.state.messageRefs.byRaw[id], endId: ctx.session.state.messageRefs.byRaw[id] })) }; }
++test("collaborative gate does not affect ordinary external summaries", () => { assert.equal(collaborativeEnabled({}), false); assert.equal(collaborativeEnabled({ externalSummary: { enabled: false, targets: [{ model: "dsh-collaborative-v1" }] } }), false); });
++test("two successful ranges commit together and exact originals remain recoverable", async () => { await fixture(async ctx => { const result = await applyConfiguredCompression(args(ctx), ctx); assert.equal(result.outcome, "applied", result.text); assert.equal(ctx.session.state.blocks.length, 2); for (const block of ctx.session.state.blocks) assert.ok(ctx.session.blockContents.get(block.blockId)?.full.text.includes(RAW), resolveDecompress({ blockId: block.blockId, full: true }, ctx).text); assert.ok(ctx.messages.find(x => x.id === "latest")); }); });
++test("one successful and one failed range leave entire live state unchanged", async () => { await fixture(async ctx => { const before = JSON.stringify(ctx.session.state), stats = JSON.stringify(ctx.session.stats); const result = await applyConfiguredCompression(args(ctx), ctx); assert.equal(result.outcome, "refused"); assert.equal(JSON.stringify(ctx.session.state), before); assert.equal(JSON.stringify(ctx.session.stats), stats); assert.equal(ctx.session.blockContents.size, 0); }, n => n === 1); });
++test("source mutation prevents draft commit and preserves new messages", () => { const ctx = context("http://localhost:1"); const t = compressionDraft(ctx.session); t.draft.state.blocks.length = 0; ctx.session.lastMessages = [...ctx.messages, { id: "new", role: "user", contentType: "text", text: "New requirement" }]; markDirty(ctx.session); assert.throws(() => t.commit(), /changed/); assert.equal(ctx.session.lastMessages.at(-1)?.id, "new"); });
++test("preflight failure leaves original history untouched", async () => { await fixture(async ctx => { ctx.config.modelContextLimit = 1500; const before = JSON.stringify(ctx.session.state); const result = await preflightCompress({ core: ctx.core, config: ctx.config, session: ctx.session, prompts: defaultPrompts, protocol: "openai", model: "unused", url: "http://127.0.0.1:1", headers: {}, log: () => {} }, ctx.messages); assert.equal(result.compressedRanges, 0); assert.equal(JSON.stringify(ctx.session.state), before); }, () => false); });
+diff --git a/tests/dsh-native.test.ts b/tests/dsh-native.test.ts
+index d1c76b4..3d8150b 100644
+--- a/tests/dsh-native.test.ts
++++ b/tests/dsh-native.test.ts
+@@ -716,7 +716,7 @@ test("apply() attach mode: registers manifest tools verbatim, gates headers, for
+             const ctx = mockCtx();
+             apply(ctx);
+             // under node:test the fetch patch is deliberately NOT installed
+-            assert.equal(ctx.registeredCommands.length, 2);
++            assert.equal(ctx.registeredCommands.length, 3);
+             assert.equal(ctx.registeredCommands[0].name, "acp");
+             assert.equal(ctx.registeredCommands[1].name, "acp-cache");
+ 
+@@ -1636,7 +1636,7 @@ test("apply() /acp pre-first-request (#955): renders the runtime-table entry bef
+             _resetRegisterForTest(proxy.origin);
+             const ctx = mockCtx();
+             apply(ctx);
+-            assert.equal(ctx.registeredCommands.length, 2);
++            assert.equal(ctx.registeredCommands.length, 3);
+             const out = await ctx.registeredCommands[0].handler();
+             assert.equal(out.kind, "success");
+             assert.match(out.text, /model=qwen-ri/);
+@@ -3250,3 +3250,18 @@ test("#1365 apply() attach mode: runtime death with routed evidence — waits th
+         _resetRegisterForTest(undefined);
+     }
+ });
++test("collaborative compact routes selected ranges only to invoking session", async () => {
++ const calls: Array<{conversationId:string;tool:string;args:unknown;nativeCaller?:boolean}>=[];
++ const proxy=await startMockProxy(calls,()=>({compressibleRanges:[{startRef:'m00001',endRef:'m00009',tokens:1500}]}));
++ const home=fs.mkdtempSync(path.join(os.tmpdir(),'collab-command-'));
++ const cfg=path.join(home,'config.json');fs.writeFileSync(cfg,JSON.stringify({compress:{externalSummary:{enabled:true}}}));
++ try {await withEnv({DSH_HOME:home,BILLION_CONTEXT_PROXY:proxy.origin,BILI_CONFIG_FILE:cfg},async()=>{
++  _resetRegisterForTest(proxy.origin);const ctx=mockCtx();apply(ctx);
++  await waitFor(()=>ctx.registeredTools.length===1,'manifest');
++  const cmd=ctx.registeredCommands.find(c=>c.name==='compact')!;
++  const result=await cmd.handler({agent:{session:{id:'isolated-manual'}}});
++  assert.equal(result.kind,'success',result.text);
++  assert.equal(calls.length,1);assert.equal(calls[0].conversationId,'isolated-manual');
++  assert.equal(calls[0].tool,'compress');assert.deepEqual(calls[0].args,{content:[{startId:'m00001',endId:'m00009'}]});
++ });}finally{proxy.close();_resetRegisterForTest(undefined);rmrf(home);}
++});

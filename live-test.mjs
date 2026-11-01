@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {dataRoot} from './runtime.js';
+const host=JSON.parse(fs.readFileSync(path.join(dataRoot,'host.json'),'utf8'));
+const token=fs.readFileSync(path.join(dataRoot,'local-token'),'utf8');
+const original='[m00001 user] 合成测试项目：交付日11月3日，预算1000元。\n[m00002 user] 更正：交付11月5日，预算1200元。没有允许发布。\n[m00003 assistant] 代码已完成，测试尚未完成。路径 E:/demo/src/main.ts。错误 E_TEST。\n[m00004 user] 保留这条限制：不要删除原记录，等待测试后再讨论发布。';
+const response=await fetch(`http://127.0.0.1:${host.port}/v1/chat/completions`,{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({model:'dsh-collaborative-v1',messages:[{role:'system',content:'Summarize faithfully in Chinese. Preserve latest corrections, paths and exact numbers. AT MOST 1200 characters total.'},{role:'user',content:JSON.stringify({content:original,reference:'这是合成测试，当前任务是核验摘要。'})}]}),signal:AbortSignal.timeout(220000)});
+const data=await response.json();
+if(!response.ok)throw Error(JSON.stringify(data));
+console.log(JSON.stringify({http:response.status,summary:data.choices[0].message.content},null,2));

@@ -1,0 +1,50 @@
+{
+  "name": "dsh-collaborative-compaction",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "host.js",
+  "exports": {
+    ".": "./host.js",
+    "./runtime": "./runtime.js",
+    "./client": "./client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ],
+      "external": [
+        "react"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "description": "DSH collaborative context compaction: existing summary + Claude native compaction + independent Terra review",
+  "license": "MIT",
+  "author": "ThirvenGree",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ThirvenGree/dsh-collaborative-compaction.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "host.js",
+    "runtime.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "patches",
+    "install.ps1",
+    "prepare-engine.ps1",
+    "live-test.mjs"
+  ]
+}

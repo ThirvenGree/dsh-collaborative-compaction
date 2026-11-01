@@ -1,0 +1,39 @@
+name: Validate release
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  plugin:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check host.js
+      - run: node --check client.js
+      - run: npm test
+  engine-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify pinned upstream and patch
+        run: |
+          git clone --no-checkout https://github.com/ranxianglei/billion-context.git .engine
+          git -C .engine checkout --detach 39a0ada58f396ec6e5ee29fdbaa01c01b74f14d9
+          git -C .engine apply --check ../patches/billion-context-v0.1.209.patch
+          git -C .engine apply ../patches/billion-context-v0.1.209.patch
+      - run: npm ci --ignore-scripts
+        working-directory: .engine
+      - run: npm run build
+        working-directory: .engine
+      - run: node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts
+        working-directory: .engine
+      - run: node --import tsx --test --test-name-pattern="collaborative compact" tests/dsh-native.test.ts
+        working-directory: .engine
