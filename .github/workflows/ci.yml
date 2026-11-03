@@ -38,3 +38,8 @@ jobs:
         working-directory: .engine
       - run: node --import tsx --test --test-name-pattern="collaborative compact" tests/dsh-native.test.ts
         working-directory: .engine
+      - run: npm ci --ignore-scripts
+      - name: Run the feedback loop through its HTTP endpoints
+        env:
+          COLLAB_TEST_ENGINE: ${{ github.workspace }}/.engine
+        run: node --test test/replay-feedback-host.test.js
