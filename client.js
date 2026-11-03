@@ -269,8 +269,8 @@ function Flow({d,set,saved}){
     h('ul',null,
      h('li',null,'候选历史没有明显增长（不超过 8k token 或窗口的 10%，取较小值）时，沿用上一次的暂缓判断，最长 30 分钟。'),
      h('li',null,'自动压缩失败后暂停 10 分钟；达到 90% 硬阈值时不受暂停限制。'),
-     h('li',null,'受保护的近期历史和工具调用配对始终由引擎检查，模型选的范围不合规会被拒绝。'),
-     h('li',null,'事实核验能减少错误，但不保证摘要没有任何遗漏。'),
+     h('li',null,'软阈值下后台审核，期间可继续追加消息。下一次请求会在工具配对完整时核对旧范围并提交；若原范围变了则丢弃。'),
+     h('li',null,'可用 search_context 查找自己会话的原文、旧摘要及附件说明，按命中的 open: 引用继续阅读。'),
      h('li',null,'关闭总开关会恢复引擎原来的压缩配置；对话模型、人设和记忆不受影响。')))));
 }
 
@@ -404,6 +404,7 @@ function Panel(){
   !draft?h('div',{className:'dcc-loading'},loadError?h(R.Fragment,null,'读取设置失败：'+loadError+'。确认 DSH 已加载本插件后 ',h('button',{type:'button',className:'dcc-btn-text',onClick:refresh},'重试')):'正在读取设置…'):
   h(R.Fragment,null,
    h(Flow,{d:draft,set,saved:base?String(base.enabled)===String(draft.enabled):true}),
+   h('p',{className:'dcc-lede'},state?.retrieval?.enabled===true?'大工具结果按需取回已配置。Anthropic / OpenAI Chat Completions 插件通道从 '+state.retrieval.minToolTokens+' tokens 起可保留原件，以 '+state.retrieval.tool+' 取回。Responses 浏览器任务通过 browser_progress 查看证据。':state?.retrieval?.enabled===false?'大工具结果按需取回未开启。':'大工具结果取回配置暂未读到。'),
    h('div',{className:'dcc-tabs',role:'tablist'},
     h('button',{type:'button',role:'tab',id:'dcc-tab-settings','aria-selected':tab==='settings'?'true':'false','aria-controls':'dcc-panel-settings',className:'dcc-tab',onClick:()=>setTab('settings')},'设置',changes.length?h('span',{className:'dcc-count'},`${changes.length} 项未保存`):null),
     h('button',{type:'button',role:'tab',id:'dcc-tab-runs','aria-selected':tab==='runs'?'true':'false','aria-controls':'dcc-panel-runs',className:'dcc-tab',onClick:()=>setTab('runs')},'运行记录',failed?h('span',{className:'dcc-count dcc-tone-bad'},`${failed} 次失败`):null)),

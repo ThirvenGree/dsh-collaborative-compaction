@@ -34,7 +34,7 @@ jobs:
         working-directory: .engine
       - run: npm run build
         working-directory: .engine
-      - run: node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts
+      - run: node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts tests/search-original-evidence.test.ts tests/search-context-cross-session.test.ts tests/ccr-plugin.test.ts
         working-directory: .engine
       - run: node --import tsx --test --test-name-pattern="collaborative compact" tests/dsh-native.test.ts
         working-directory: .engine

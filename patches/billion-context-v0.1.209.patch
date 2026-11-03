@@ -1,5 +1,58 @@
+diff --git a/kernel/src/compress-tools.ts b/kernel/src/compress-tools.ts
+index ab7207c45d89f4b5f368c1d06b532ebdab1e329b..7c322539b92d97e4ba7a9b682116b5fd0b336ae6 100644
+--- a/kernel/src/compress-tools.ts
++++ b/kernel/src/compress-tools.ts
+@@ -193,7 +193,7 @@ You have five context-management tools:
+ 
+ - compress — Replace consumed conversation ranges with self-contained summaries you write. ONE call carries EVERY range: compress({ content: "m00150–m00220 Auth\\nsummary…\\nm00300–m00350 Deploy\\nsummary…" }) — one plain string, one block per range, each block starting with its 'mNNNNN–mNNNNN optional topic' header line followed by that block's summary (a valid JSON string: \\\" and \\n). A single range is the same shape with one block. Never split a batch into one call per range.
+ - decompress — Restore a previously compressed block's content. By default restores one tier up (T2→T1 summaries, not raw messages). Use full: true to restore all the way to original messages. Use toFile to write to file instead of inflating context. Example: decompress({ blockId: "b5" }) or decompress({ blockId: "b5", toFile: "path" }) or decompress({ blockId: "b5", full: true }).
+-- search_context — Search compressed block summaries (and optionally visible messages) by keyword. Use BEFORE decompressing to find the right block. Example: search_context({ query: "auth token refresh" }).
++- search_context — Search available original messages, attachments and summaries by keyword. Use BEFORE decompressing to find the right block. Example: search_context({ query: "auth token refresh" }).
+ - acp_status — Context status with compressible ranges. No args = overview + ranges. Use to find what to compress next.`,
+   ],
+   [
+@@ -264,7 +264,7 @@ Since host tools cannot coexist with a declared tools field, ALL ACP tools use t
+    ${ACP_STATUS_OPEN}${ACP_STATUS_CLOSE}
+    No payload needed. Use this FIRST when unsure about context state.
+ 
+-2. search_context — search compressed block summaries by keyword:
++2. search_context — search available original messages and summaries by keyword:
+    ${ACP_SEARCH_OPEN}{"query":"auth token refresh"}${ACP_SEARCH_CLOSE}
+    Use when you need details that may have been compressed away.
+ 
+@@ -332,7 +332,7 @@ Rules for the trigger:
+ The proxy also provides these as real function tools you can call directly (they appear in your tool list). Call them like any other function; the proxy executes them and returns the result, then you continue.
+ 
+ - acp_status — view context usage, compression state, and compressible ranges. No arguments. Use this FIRST when unsure about context state.
+-- search_context — search compressed block summaries by keyword. Arguments: {"query":"...","limit":5}.
++- search_context — search available original messages and summaries by keyword. Arguments: {"query":"...","limit":5}.
+ - decompress — restore compressed content for exact details. Arguments: {"blockId":"b5"} (optional "toFile":"/tmp/x.txt", "full":true).
+ 
+ Note: compress is ONLY available via the text marker above (it needs batch ranges + an immediate stop), NOT as a function tool.`,
+@@ -387,7 +387,7 @@ export const SEARCH_CONTEXT_TOOL_OPENAI = {
+   function: {
+     name: SEARCH_CONTEXT_TOOL_NAME,
+     description:
+-      "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
++      "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
+     parameters: {
+       type: "object",
+       properties: {
+diff --git a/kernel/src/packs.ts b/kernel/src/packs.ts
+index be73344faa298f8fc54b7ce4f90c384ff3e164d7..ed900c2e426bc6124d685833b8bf0bedc3c95b1f 100644
+--- a/kernel/src/packs.ts
++++ b/kernel/src/packs.ts
+@@ -195,7 +195,7 @@ const LEAN_TOOL_PROMPTS: ToolPrompts = {
+   },
+   search_context: {
+     description:
+-      "Search compressed summaries and historical messages by keyword; returns refs, sizes, previews.",
++      "Search original messages, attachment descriptions and summaries by keyword; follow the returned refs or open: query for more evidence.",
+   },
+   acp_status: {
+     description:
 diff --git a/reference/architecture.md b/reference/architecture.md
-index acbbd53..bfc5f63 100644
+index acbbd537c12c19fcb8b8373710824136f85c0fdc..edc4784ca3b463a2d4b872edc038ce7e4fb85825 100644
 --- a/reference/architecture.md
 +++ b/reference/architecture.md
 @@ -9,6 +9,7 @@
@@ -10,14 +63,16 @@ index acbbd53..bfc5f63 100644
  │   ├── cli.ts                    # CLI dispatcher: start/update/export/test/plugin + client launcher
  │   ├── server.ts                 # HTTP proxy server, request pipeline (hot file — §7.2)
  │   ├── server/                   # Server-side support modules
-@@ -218,3 +219,5 @@ When navigating this codebase, these are the load-bearing entry points:
+@@ -218,3 +219,7 @@ When navigating this codebase, these are the load-bearing entry points:
  - **E2E regression** — `tests/e2e/` contains real-client suites (codex, opencode, pi, dsh) plus hermetic lanes (registry, advisory-rollback, release-canary, opencode WS, image billing); each carries its own skip gate — read the test header for the exact env var.
  - **Compression kernel** — `kernel/` (in-repo acp-kernel, #2092). Human-gated boundary; see `AGENTS.md` "Kernel Boundary".
  - **Pi sub-agent surface** — `pi-subagents/` (in-repo billion-context-pi-subagents, #2384); wired into the pi lane by `src/agent/pi-subagents.ts`. Lighter-gated boundary than the kernel; see `AGENTS.md` "Pi-Subagents Boundary".
 +
 +- `src/collaborative-planner.ts`: authenticated local model planning; validates suggested ranges before engine preview.
++
++- `src/collaborative-background.ts`: staged soft-pressure review; safe-boundary replay on the current session.
 diff --git a/src/agent/dsh-native.ts b/src/agent/dsh-native.ts
-index 779ec5f..c049d6e 100644
+index 779ec5ff994ceae6d80e5be5ffc06c13c405643a..c049d6ebe1a733a000c09510e9e64a177aa7917a 100644
 --- a/src/agent/dsh-native.ts
 +++ b/src/agent/dsh-native.ts
 @@ -57,7 +57,7 @@ import { ensureProxyRunning, LAUNCHER_DEFAULT_HOST, requestInstanceShutdown } fr
@@ -74,7 +129,7 @@ index 779ec5f..c049d6e 100644
      // node:test drives apply() directly with a mock ctx — never patch
      // globalThis.fetch from inside a test run.
 diff --git a/src/agent/shared.ts b/src/agent/shared.ts
-index 9770212..4e00325 100644
+index 9770212b336176a30020991878bf1bdd38300b8c..4e003254ddbe538af7f398679210ea451c0bf143 100644
 --- a/src/agent/shared.ts
 +++ b/src/agent/shared.ts
 @@ -376,8 +376,9 @@ export async function reportAttributionHealth(proxyBase: string, health: Attribu
@@ -89,9 +144,175 @@ index 9770212..4e00325 100644
      if (toolCallId !== undefined) body.toolCallId = toolCallId;
      // #2072: host-native agents (pi / dsh / opencode) stamp a per-call id minted
      // by the host's own session manager — declare it so a stale sibling witness
+diff --git a/src/collaborative-background.ts b/src/collaborative-background.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a597493a8d29a5315ef12dbb8f1f5beff6035576
+--- /dev/null
++++ b/src/collaborative-background.ts
+@@ -0,0 +1,160 @@
++import { isDeepStrictEqual } from "node:util";
++import type { CoreMessage, CompressionBlock, CompressibleRange } from "acp-kernel";
++import { type ParsedRange } from "./compress-tool.js";
++import type { ResolvedKernelConfig } from "./compress-settings.js";
++import { backgroundFoldCancellations, compressionDraft } from "./collaborative-transaction.js";
++import { applyConfiguredCompressionInner } from "./external-summary-compress.js";
++import { planHistory } from "./collaborative-planner.js";
++import { deferredCandidatesCovered } from "./preflight.js";
++import { epochConfirmPending } from "./fold-reconcile.js";
++import { markDirty, type Session } from "./session.js";
++import { applyRanges, type RewriteCtx } from "./stream.js";
++
++type Ticket = {
++    key: string;
++    finished?: boolean;
++    invalidated?: boolean;
++    publish?: (current: RewriteCtx) => void;
++};
++const tickets = new WeakMap<Session, Ticket>();
++const waits = new WeakMap<Session, { key: string; ranges: CompressibleRange[]; until: number }>();
++
++function completeToolBoundary(messages: CoreMessage[]) {
++    const pending = new Set<string>();
++    for (const message of messages) {
++        if (message.contentType === "tool-call") {
++            if (!message.toolCallId) return false;
++            pending.add(message.toolCallId);
++        } else if (message.contentType === "tool-result" && message.toolCallId) {
++            pending.delete(message.toolCallId);
++        }
++    }
++    return !pending.size;
++}
++
++function coverage(block: CompressionBlock) {
++    return [block.startRef, block.endRef, block.topic, block.summary, block.effectiveMessageIds, block.directMessageIds, block.directBlockIds];
++}
++
++// Replay only the exact approved batch. The live kernel recalculates protection,
++// tool pairs, counters, refs and overlaps rather than installing an old state.
++function publisher(before: Session, reviewed: Session, messages: CoreMessage[], ranges: ParsedRange[]) {
++    const anchors = new Set(ranges.map(range => range.compressCallId));
++    const selected = (session: Session) => session.state.blocks.filter(block => block.compressCallId && anchors.has(block.compressCallId));
++    const blocks = selected(reviewed);
++    if (blocks.length !== ranges.length) throw Error("Unreplayable reviewed block batch");
++    const ids = new Set(blocks.flatMap(block => block.effectiveMessageIds));
++    const originals = new Map([...before.lastMessages ?? [], ...messages].filter(m => ids.has(m.id)).map(m => [m.id, m]));
++    const sourceBlocks = before.state.blocks.filter(b => b.effectiveMessageIds.some(id => ids.has(id)));
++    const originalRefs = new Map([...ids].map(id=>[id,before.state.messageRefs.byRaw[id]]));
++    const sourceContents = new Map(sourceBlocks.map(block=>[block.blockId,before.blockContents.get(block.blockId)]));
++    const reviewedContents = new Map(blocks.map(block=>[block.blockId,reviewed.blockContents.get(block.blockId)]));
++    return (ctx: RewriteCtx) => {
++        const current = new Map([...ctx.session.lastMessages ?? [], ...ctx.messages].map(m => [m.id, m]));
++        for (const id of ids) {
++            if (originalRefs.get(id) !== ctx.session.state.messageRefs.byRaw[id] ||
++                !isDeepStrictEqual(originals.get(id), current.get(id))) throw Error("Covered message or reference changed");
++            if (!originals.has(id) && !sourceBlocks.some(b => b.effectiveMessageIds.includes(id) && sourceContents.get(b.blockId)?.full)) throw Error("Missing original");
++        }
++        const liveBlocks = ctx.session.state.blocks.filter(b => b.effectiveMessageIds.some(id => ids.has(id)));
++        if (liveBlocks.length !== sourceBlocks.length) throw Error("Overlapping compression changed");
++        for (const block of sourceBlocks) {
++            const live = liveBlocks.find(b => b.blockId === block.blockId);
++            if (!live || live.active !== block.active || live.restoredInline !== block.restoredInline ||
++                !isDeepStrictEqual(coverage(live), coverage(block)) ||
++                !isDeepStrictEqual(ctx.session.blockContents.get(block.blockId), sourceContents.get(block.blockId))) throw Error("Source block changed");
++        }
++        const txn = compressionDraft(ctx.session);
++        const applied = applyRanges({ ranges, diagnostics: {ok:true,kind:"ok",invalidItems:0} }, {...ctx, session: txn.draft});
++        const added = selected(txn.draft);
++        if (applied.outcome !== "applied" || !isDeepStrictEqual(added.map(coverage), blocks.map(coverage))) throw Error("Current range or protection changed");
++        for (let i = 0; i < blocks.length; i++) {
++            const content = reviewedContents.get(blocks[i].blockId);
++            if (!content?.full || content.full.count !== new Set(blocks[i].effectiveMessageIds).size) throw Error("Missing reviewed originals");
++            txn.draft.blockContents.set(added[i].blockId, content);
++        }
++        txn.commit();
++    };
++}
++
++// Called at the request boundary, inside the existing session lock. A published
++// batch is re-prepared by the caller; no network operation runs inside its commit.
++export function takeBackgroundFold(ctx: RewriteCtx, key: string): boolean {
++    const job = tickets.get(ctx.session);
++    if (!job) return false;
++    if (job.key !== key) {
++        job.invalidated = true;
++        void backgroundFoldCancellations.get(ctx.session)?.();
++        return false;
++    }
++    if (!job.finished || job.invalidated) return false;
++    if (!completeToolBoundary(ctx.messages)) return false;
++    tickets.delete(ctx.session);
++    backgroundFoldCancellations.delete(ctx.session);
++    if (!job.publish || epochConfirmPending(ctx.session)) return false;
++    try { job.publish(ctx); ctx.log("[collaborative background] committed at a completed tool boundary"); return true; }
++    catch (error) { ctx.log("[collaborative background] discarded: " + String(error)); return false; }
++}
++
++export function startBackgroundFold(ctx: RewriteCtx, ranges: CompressibleRange[], key: string): void {
++    const {session, config} = ctx;
++    if (tickets.has(session) || epochConfirmPending(session) || !ranges.length) return;
++    if (Number(session.metadata.autoFoldBackoffUntil) > Date.now()) return;
++    const prior = waits.get(session);
++    if (prior?.key === key && prior.until > Date.now() && deferredCandidatesCovered(prior.ranges, ranges,
++        new Map(ctx.messages.map((m,i)=>[session.state.messageRefs.byRaw[m.id],i])), config.modelContextLimit)) return;
++    // Request-owned message objects are replaced (never reused as scratch) by
++    // prepare. Capture only the array and its stable refs until planning says now.
++    const messages = ctx.messages.slice();
++    const refs = messages.map(m => session.state.messageRefs.byRaw[m.id]);
++    const candidates = ranges.map(r => ({startId:r.startRef, endId:r.endRef}));
++    const ticket: Ticket = {key};
++    tickets.set(session, ticket);
++    const controller = new AbortController();
++    const run = async () => {
++        const decision = await planHistory(config as ResolvedKernelConfig, session, messages, candidates, false, controller.signal);
++        controller.signal.throwIfAborted();
++        if (decision.decision === "wait" || decision.decision === "uncertain") {
++            waits.set(session, {key, ranges, until: Date.now()+30*60_000});
++            return;
++        }
++        const selected = decision.decision === "legacy" ? candidates.slice(0,1) : decision.ranges;
++        const indices = new Map(refs.map((ref,index)=>[ref,index]));
++        for (const range of selected) {
++            const start = indices.get(range.startId), end = indices.get(range.endId);
++            if (start === undefined || end === undefined || end < start) return;
++            for (let i=start; i<=end; i++) {
++                if (session.state.messageRefs.byRaw[messages[i].id] !== refs[i]) return;
++            }
++        }
++        const base = compressionDraft(session).draft;
++        const reviewed = compressionDraft(base).draft;
++        let batch: ParsedRange[] | undefined;
++        const result = await applyConfiguredCompressionInner({content:selected}, {...ctx, session:reviewed, messages}, undefined,
++            controller.signal, "auto", undefined, ready => { batch=ready; });
++        controller.signal.throwIfAborted();
++        if (result.outcome !== "applied" || !batch) throw Error(result.text);
++        ticket.publish = publisher(base, reviewed, messages, batch);
++    };
++    ctx.log("[collaborative background] reviewing eligible history; foreground continues");
++    const done = run().catch(error => {
++        if (controller.signal.aborted) return;
++        session.metadata.autoFoldBackoffUntil=Date.now()+10*60_000;
++        markDirty(session);
++        ctx.log("[collaborative background] originals retained: "+String(error));
++    }).finally(() => {
++        ticket.finished=true;
++        if (!ticket.publish && tickets.get(session)===ticket) {
++            tickets.delete(session);
++            backgroundFoldCancellations.delete(session);
++        }
++    });
++    backgroundFoldCancellations.set(session, async () => {
++        controller.abort();
++        await done;
++        if (tickets.get(session)===ticket) {
++            tickets.delete(session);
++            backgroundFoldCancellations.delete(session);
++        }
++    });
++}
 diff --git a/src/collaborative-planner.ts b/src/collaborative-planner.ts
 new file mode 100644
-index 0000000..3ee2f51
+index 0000000000000000000000000000000000000000..3ee2f51b4b5ee0f55d3d70c86a28fc8271610083
 --- /dev/null
 +++ b/src/collaborative-planner.ts
 @@ -0,0 +1,44 @@
@@ -141,10 +362,10 @@ index 0000000..3ee2f51
 +}
 diff --git a/src/collaborative-transaction.ts b/src/collaborative-transaction.ts
 new file mode 100644
-index 0000000..a2b4c12
+index 0000000000000000000000000000000000000000..5713b5f74f919fe49648820caea702cae2f0d06a
 --- /dev/null
 +++ b/src/collaborative-transaction.ts
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,80 @@
 +import { compressionDraftSessions, markDirty, type Session } from "./session.js";
 +import { ccrEnabled, contentStoreOf } from "./store.js";
 +import { isDeepStrictEqual } from "node:util";
@@ -219,8 +440,61 @@ index 0000000..a2b4c12
 +}
 +
 +export function collaborativePlanningEnabled(config: unknown): boolean { return collaborativeEnabled(config) && (config as ResolvedKernelConfig).externalSummary?.modelPlanning !== false; }
++
++// Manual compression and hard-pressure work take precedence over speculative work.
++export const backgroundFoldCancellations = new WeakMap<Session, () => Promise<void>>();
++export async function cancelBackgroundFold(session: Session): Promise<void> {
++    await backgroundFoldCancellations.get(session)?.();
++}
+diff --git a/src/decompress-shared.ts b/src/decompress-shared.ts
+index 105d21956f83ee74907f5011cc9665e5a98b5541..d8d38b502df05919ff768083c062e986812c0746 100644
+--- a/src/decompress-shared.ts
++++ b/src/decompress-shared.ts
+@@ -18,7 +18,8 @@ import { dirname, join, resolve as resolvePath } from "node:path";
+ import { tmpdir } from "node:os";
+ import { fileURLToPath } from "node:url";
+ import { markDirty, preCompactionArchiveOf, peekSession, findSessionByCanonicalId, type Session } from "./session.js";
+-import { getStore } from "./persist.js";
++import { getStore, peekSearchableTranscript } from "./persist.js";
++import { searchEvidence } from "./search-evidence.js";
+ import { ccrEnabled, contentStoreOf } from "./store.js";
+ import { safePrefix } from "./text-safe.js";
+ import { decompressTmpCap as knobDecompressTmpCap } from "./knobs.js";
+@@ -867,8 +868,22 @@ export function executeSearchContextTarget(
+         : undefined;
+     // #1125: honor the param description's "Defaults to the current conversation" —
+     // the literal "current" (any case) resolves to this session, not the foreign lookup.
++    const ownSearch = () => {
++        const query=typeof args.query === "string"? args.query.trim():"";
++        if(!query || query.length>1024)return toolFail("[search_context FAILED: query is required (1–1024 characters)]");
++        const limit=Number.isFinite(args.limit)&&Number(args.limit)>0? Math.min(12,Math.max(1,Math.floor(Number(args.limit)))):5;
++        const local=executeSearchContext({...args,query,limit},core,state,undefined,plan);
++        const session=ctx?.session;
++        if(!session || session.id!==sessionId)return local;
++        const original=searchEvidence(session,query,limit,ctx?.messages??[],peekSearchableTranscript(sessionId),ccrEnabled(session)?contentStoreOf(session):undefined);
++        if(!original && local.text.startsWith("[No compressed blocks exist yet"))return toolOk("[No compressed blocks exist yet; no matching own-session original evidence was found.]");
++        if(!original && local.text.startsWith("[No blocks matched"))return toolOk(`[No blocks matched "${query}" and no available current-session originals matched. A missing record is not evidence it never happened.]`);
++        if(!original)return local;
++        if(query.startsWith("open:")||local.text.startsWith("[No "))return toolOk(original);
++        return toolOk(original+"\n\n"+safePrefix(local.text,3500));
++    };
+     if (!requested || requested === sessionId || requested.toLowerCase() === "current") {
+-        const local = executeSearchContext(args, core, state, undefined, plan);
++        const local = ownSearch();
+         // #1333: a derived session (pi RLM child) has no blocks of its own —
+         // fall back to the recorded parent chain (read-only) instead of a
+         // bare "nothing to search".
+@@ -886,7 +901,7 @@ export function executeSearchContextTarget(
+     // A self-reference under an alias form (canonical pfa-* id) keeps plain
+     // current-session semantics — no "historical session" framing.
+     const self = peekSession(requested) ?? findSessionByCanonicalId(requested);
+-    if (self?.id === sessionId) return executeSearchContext(args, core, state, undefined, plan);
++    if (self?.id === sessionId) return ownSearch();
+     const foreign = resolveForeignSessionState(requested);
+     if (!foreign) return toolFail(`[search_context FAILED: unknown session "${requested}"]`);
+     return executeSearchContext(args, core, foreign, requested);
 diff --git a/src/external-summary-compress.ts b/src/external-summary-compress.ts
-index 24c0d21..f54da07 100644
+index 24c0d217e1309de8fbabdbadfbcdcb36f3f2362a..74f0aa3349cf105737a1b2567c13ceb6f4b4dec8 100644
 --- a/src/external-summary-compress.ts
 +++ b/src/external-summary-compress.ts
 @@ -1,3 +1,4 @@
@@ -233,17 +507,18 @@ index 24c0d21..f54da07 100644
  import { describeExternalSummaryFailure, summaryLengthBudgetClause, type SummaryWork } from "./external-summary.js";
  import { newExternalCallId } from "./external-summary-marker.js";
 +import { planHistory } from "./collaborative-planner.js";
-+import { collaborativeEnabled, compressionDraft } from "./collaborative-transaction.js";
++import { cancelBackgroundFold, collaborativeEnabled, compressionDraft } from "./collaborative-transaction.js";
  
  // Re-exported for callers that historically imported it here; the canonical
  // home is the leaf module (kept import-graph-light for display surfaces).
-@@ -33,7 +36,38 @@ function withOptionalSummaries(input: unknown): unknown {
+@@ -33,7 +36,39 @@ function withOptionalSummaries(input: unknown): unknown {
  }
  
  /** Called under the host session lock; generation is separate from kernel commit. */
 -export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal): Promise<ProxyToolResult> {
 +export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal, planned = false, pressure?: "hard"): Promise<ProxyToolResult> {
 +    if (!collaborativeEnabled(ctx.config)) return applyConfiguredCompressionInner(input, ctx, callId, signal);
++    if (!planned) await cancelBackgroundFold(ctx.session);
 +    const requestId = callId || randomUUID();
 +    let stage = "snapshot";
 +    try {
@@ -273,11 +548,11 @@ index 24c0d21..f54da07 100644
 +    }
 +}
 +
-+async function applyConfiguredCompressionInner(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal, trigger: SummaryWork["trigger"] = "tool", pressure?: "hard"): Promise<ProxyToolResult> {
++export async function applyConfiguredCompressionInner(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal, trigger: SummaryWork["trigger"] = "tool", pressure?: "hard", reviewed?: (ranges: ParsedRange[]) => void): Promise<ProxyToolResult> {
      if (signal?.aborted) return compressResult("[Compression FAILED: cancelled. Nothing compressed.]", "refused", 0);
      // The plan rides the request Config rail (#833: ctx.config is the
      // session's effective Config — same cascade that produced the wire).
-@@ -53,6 +87,8 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+@@ -53,6 +88,8 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
          const notes = imagePlaceholders(message);
          return notes.length > 0 ? { ...message, text: `${message.text ?? ""}\n${notes.join(" ")}` } : message;
      });
@@ -286,7 +561,7 @@ index 24c0d21..f54da07 100644
      const work: SummaryWork[] = [];
      const valid: ParsedRange[] = [];
      // Kernel protection and aggregate size checks must see the complete batch.
-@@ -62,6 +98,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+@@ -62,6 +99,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
          return { ...range, summary: (`external-probe-${index}:`).padEnd(length, "x").slice(0, length) };
      });
      const preview = ctx.core.applyCompression({ messages, state, config: ctx.config, ranges: probes });
@@ -294,7 +569,7 @@ index 24c0d21..f54da07 100644
      const before = new Map(state.blocks.map((block) => [block.blockId, block]));
      const source = messages.map((message) => ({ ...message, text:
          `[${state.messageRefs.byRaw[message.id] ?? message.id}] ${message.text ?? ""}` }));
-@@ -70,7 +107,25 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+@@ -70,7 +108,25 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
              && before.get(candidate.blockId)?.summary !== candidate.summary);
          if (blocks.length === 0) continue;
          const content = blocks.map((block) => {
@@ -321,7 +596,7 @@ index 24c0d21..f54da07 100644
              if (collected.trim()) return collected;
              // An inline-restored block may no longer have originals in the wire view.
              const cached = ctx.session.blockContents.get(block.blockId);
-@@ -90,12 +145,13 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+@@ -90,12 +146,13 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
          // — the preflight path has told its summarizers this number since #1775;
          // without it the compress path asked for output it could never accept.
          const maxSummaryChars = Math.min(range.summaryMaxChars ?? Infinity, ctx.config.compress.maxSummaryLength);
@@ -336,7 +611,7 @@ index 24c0d21..f54da07 100644
      if (signal?.aborted || ctx.session.state !== state || ctx.session.revisionEpoch !== revision) return compressResult("[Compression FAILED: cancelled or session changed while generating external summaries. Nothing compressed.]", "refused", 0);
      const successful: ParsedRange[] = [];
      for (const [index, result] of batch.results.entries()) {
-@@ -108,6 +164,14 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+@@ -108,6 +165,14 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
      // the tool result too — enums and numbers only, never payload bytes.
      if (successful.length === 0) return compressResult(`[Compression FAILED: all configured external summary candidates failed or exceeded their budget. Nothing compressed; do not retry unchanged configuration — summaries longer than the configured cap are rejected whole, so raise compress.maxSummaryLength or request less via per-range summaryMaxChars.] [${describeExternalSummaryFailure(batch)}]`, "refused", 0);
      const applied = applyRanges({ ...parsed, ranges: successful }, ctx);
@@ -351,8 +626,15 @@ index 24c0d21..f54da07 100644
      // Client call arguments carry only an optional hint, never the generated summary.
      // In-place refolds retain their old call id in the kernel; keep their anchor too.
      for (const block of ctx.session.state.blocks) {
+@@ -116,5 +181,6 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+     if (successful.length < parsed.ranges.length && (applied.blocksCreated ?? 0) > 0) return {
+         ...applied, outcome: "partial", text: `${applied.text}\n[External summary: ${parsed.ranges.length - successful.length} selected range(s) were not compressed.]`,
+     };
++    if (applied.outcome === "applied") reviewed?.(successful);
+     return applied;
+ }
 diff --git a/src/external-summary-http.ts b/src/external-summary-http.ts
-index dd6f743..5c4eac3 100644
+index dd6f7433c6887b64b7234fd51ac36cd1a7a55c14..5c4eac382125fbeb1269e2b86576890d0aabcb10 100644
 --- a/src/external-summary-http.ts
 +++ b/src/external-summary-http.ts
 @@ -228,6 +228,7 @@ export function createSummaryHttpCandidate(target: SummaryHttpTarget, maxRespons
@@ -375,7 +657,7 @@ index dd6f743..5c4eac3 100644
                          loggerLog("warn", `[external-summary] candidate ${plan.model} attempt ${attempt}/${SUMMARY_MAX_ATTEMPTS} rejected: HTTP ${dispatched.response.status} (${diagnostics()}) from ${host}${snippet ? ` — ${maskUrlsInText(snippet)}` : ""}`);
                          if (attempt < SUMMARY_MAX_ATTEMPTS && !signal.aborted && isTransientUpstreamError(dispatched.response.status, snippet)) {
 diff --git a/src/external-summary-runtime.ts b/src/external-summary-runtime.ts
-index 56b565b..2347929 100644
+index 56b565b2d39da6fbfd2680c0c9a9763fd445d463..234792911005a1e8abe0ee4209118fc86ec6c425 100644
 --- a/src/external-summary-runtime.ts
 +++ b/src/external-summary-runtime.ts
 @@ -17,6 +17,7 @@ export const _executorForTest = executor;
@@ -402,7 +684,7 @@ index 56b565b..2347929 100644
          for (const item of batch.results) this.stats.attempts += item.attempts.length;
          return batch;
 diff --git a/src/external-summary-settings.ts b/src/external-summary-settings.ts
-index 4e02788..d423960 100644
+index 4e0278882c839c159a5e7ffaeeae2c9bc68b7591..d4239607f13ec4fa914ace968a91c7e90c813a56 100644
 --- a/src/external-summary-settings.ts
 +++ b/src/external-summary-settings.ts
 @@ -40,6 +40,7 @@ export interface ExternalSummarySettings {
@@ -467,7 +749,7 @@ index 4e02788..d423960 100644
          if (!seenExpansionWarnings.has(message)) {
              seenExpansionWarnings.add(message);
 diff --git a/src/external-summary.ts b/src/external-summary.ts
-index 622eceb..7447c5f 100644
+index 622eceb4e5c8ad28f63bc5095be846b7cebb20ff..7447c5fecc0a47be763a2cc0e5338b2de675b632 100644
 --- a/src/external-summary.ts
 +++ b/src/external-summary.ts
 @@ -1,4 +1,7 @@
@@ -479,7 +761,7 @@ index 622eceb..7447c5f 100644
      readonly instructions: string;
      readonly reference?: string;
 diff --git a/src/loop/core.ts b/src/loop/core.ts
-index c103051..2a82b17 100644
+index c103051f2415d3a51aacf72cc46b354adb7c16f4..2a82b170cafbe59c88249c4294db8d67ea8a5cd1 100644
 --- a/src/loop/core.ts
 +++ b/src/loop/core.ts
 @@ -182,6 +182,7 @@ function activeAbsorbToolName(session: Session, config: Config): string | undefi
@@ -490,8 +772,35 @@ index c103051..2a82b17 100644
      core: CompressionCore;
      config: Config;
      messages: CoreMessage[];
+diff --git a/src/persist.ts b/src/persist.ts
+index 10be0e6c823ef4b29a0b094166f95bc047a201e8..a1d556e7c6a0be7ef09748c36b892bb157260480 100644
+--- a/src/persist.ts
++++ b/src/persist.ts
+@@ -1893,6 +1893,11 @@ export class SessionStore {
+      *  transcript (msgId/ref/refNum/contentHash included) in seq order.
+      *  Null when the unified store is unavailable — the render lane must
+      *  degrade to the legacy path, never guess. */
++    searchableTranscript(sessionId: string) {
++        if (!this.shadow || this.shadow.stats.disabled) return [];
++        try { return this.shadow.searchableTranscript(sessionId); } catch { return []; }
++    }
++
+     unifiedTailViewRows(sessionId: string): import("./storage/store.js").MessageRow[] | null {
+         if (!this.shadow || this.shadow.stats.disabled) return null;
+         try {
+@@ -3322,6 +3327,10 @@ function peekStoreForStamp(): SessionStore | null {
+  *  half-readable view. Rows are the raw client view caliber (#2627 — what a
+  *  live model request would have re-sent), persisted on every save via the
+  *  raw-tail ingest. */
++export function peekSearchableTranscript(sessionId: string) {
++    return peekStoreForStamp()?.searchableTranscript(sessionId) ?? [];
++}
++
+ export function peekStoredTailView(sessionId: string): BiliMessage[] | null {
+     const store = peekStoreForStamp();
+     if (!store) return null;
 diff --git a/src/plugin.ts b/src/plugin.ts
-index ec497fb..4f764e9 100644
+index ec497fbd87e9cd713481286b438528e4f05aaf54..4f764e9d87ebd45e7afe6ef979d779152ee6f54d 100644
 --- a/src/plugin.ts
 +++ b/src/plugin.ts
 @@ -1887,9 +1887,9 @@ export async function handlePluginTool(
@@ -515,7 +824,7 @@ index ec497fb..4f764e9 100644
                  // #833: run proxy tools under the session's last resolved Config
                  // (same values the wire path used), not the base kernelConfig.
 diff --git a/src/preflight.ts b/src/preflight.ts
-index 0af1155..00b9120 100644
+index 0af1155dd3e48b5378fa92f2ddd7fdc636979e21..00b9120a1480eb5b56bec936dbd860b075f6ac8d 100644
 --- a/src/preflight.ts
 +++ b/src/preflight.ts
 @@ -1,3 +1,4 @@
@@ -721,16 +1030,158 @@ index 0af1155..00b9120 100644
                                  const rescued = truncateSummaryToLimit(candidate, maxSummary, activeConfig.compress.minSummaryLength);
                                  if (rescued !== null && shrinkOk(rescued)) {
                                      deps.log("warn", `[preflight] range ${skipKey}: assembled summary ${candidate.length} chars exceeded maxSummaryLength (${maxSummary}); truncated to ${rescued.length} chars`);
+diff --git a/src/search-evidence.ts b/src/search-evidence.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ef288cee6612e4c44646500cd18c29cce89f8756
+--- /dev/null
++++ b/src/search-evidence.ts
+@@ -0,0 +1,123 @@
++import { createHash } from "node:crypto";
++import type { CoreMessage, MessageContentStore } from "acp-kernel";
++import type { BiliMessage } from "acp-kernel/wire";
++import type { Session } from "./session.js";
++import type { SearchTranscriptRow } from "./storage/store.js";
++import { redactSecretsInText } from "./log-mask.js";
++import { safePrefix } from "./text-safe.js";
++
++const pageSize = 1600;
++const hash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 24);
++const clean = (s: string) => redactSecretsInText(s)
++    .replace(/((?:令牌|密钥|口令|密码)[】"'\s:=：]*)([\w.+/=-]{8,})/giu, "$1<masked>")
++    .replace(/(?:data:[\w.+/-]+;base64,)?[A-Za-z0-9+/=_-]{128,}/g, "<encoded bytes omitted>");
++type Note = { key: string; text: string; label: string; ref?: string; block?: string; retrieve?: boolean; corrects?: string };
++type Hit = { note: Note; score: number; at: number; order: number };
++
++function fromWire(m: CoreMessage): SearchTranscriptRow {
++    const raw = m as BiliMessage & { timestamp?: string | number; source?: {kind?: string}; corrects?: string; attachment?: {description?: string} };
++    const part = (raw.rawAnthropicBlock || raw.rawOpenaiContent || raw.rawResponsesItem) as { filename?: string; title?: string; description?: string; alt?: string } | undefined;
++    return { id:m.id, role:m.role, contentType:m.contentType, text:m.text, toolName:m.toolName,
++        sourceKind:raw.source?.kind, timestamp:raw.timestamp, corrects:raw.corrects,
++        attachment:raw.attachment?.description || part?.description || part?.title || part?.filename || part?.alt || raw.imageMediaType };
++}
++
++function metadata(m: SearchTranscriptRow): string {
++    const declared = typeof m.sourceKind === "string" ? clean(m.sourceKind).slice(0, 100) : "";
++    const envelope = m.role === "user" && /【(?:本次消息快照|内部|QQ|会话令牌|引导唤醒|唤醒提醒)/u.test(m.text ?? "");
++    const who = declared ? "source="+declared : envelope ? "bridge/internal envelope; attribution requires the enclosed message" : "author unverified";
++    const when = typeof m.timestamp === "number" || typeof m.timestamp === "string" ? String(m.timestamp).slice(0,64) : "unknown";
++    return `role=${m.role} ${who} time=${when}` + (m.toolName ? " tool="+clean(m.toolName).slice(0,100) : "");
++}
++
++/** Original-message recall is current-session only. Foreign-session delegation retains summary-only semantics. */
++export function searchEvidence(session: Session, query: string, limit: number, view: CoreMessage[], persisted: SearchTranscriptRow[], store?: MessageContentStore): string {
++    const read = /^open:(ev-[a-f0-9]{24})(?::(\d{1,12}))?$/.exec(query.trim());
++    const scoped = /^block:(b\d+)\s+(.+)$/is.exec(query);
++    const searchText=(scoped?.[2]??query).trim().toLowerCase();
++    const terms = [...new Set(searchText.split(/\s+/))];
++    const target = scoped ? session.state.blocks.find(b=>b.blockId===scoped[1]) : undefined;
++    if(scoped&&!target)return "[Unknown original-evidence block in this session.]";
++    const selectedIds=target ? new Set(target.effectiveMessageIds) : undefined;
++    const messages = new Map<string, SearchTranscriptRow>();
++    const add = (m: SearchTranscriptRow) => {
++        if (!m.id || m.contentType === "reasoning" || !["user","assistant","tool"].includes(m.role) || m.id.startsWith("acp_summary_")) return;
++        const prior=messages.get(m.id);
++        if (!prior) messages.set(m.id,m);
++        else if(m.text && !m.text.includes("📦")) messages.set(m.id,{
++            ...prior,...m,timestamp:m.timestamp??prior.timestamp,sourceKind:m.sourceKind??prior.sourceKind,
++            corrects:m.corrects??prior.corrects,attachment:m.attachment??prior.attachment
++        });
++    };
++    persisted.forEach(add);
++    for(const m of session.lastMessages??[]) add(fromWire(m));
++    for(const m of view) add(fromWire(m));
++
++    const refs=session.state.messageRefs.byRaw;
++    const coverage=new Map<string,string>();
++    for(const b of [...session.state.blocks].sort((x,y)=>Number(y.active)-Number(x.active)||x.tier-y.tier))
++        for(const id of b.effectiveMessageIds) if(!coverage.has(id)) coverage.set(id,b.blockId);
++    const notes:Note[]=[];
++    for(const m of messages.values()){
++        const ref=refs[m.id], stored=ref && store?.byRef[ref];
++        const original=stored && stored.rawId===m.id ? store?.byHash[stored.hash]:undefined;
++        const text=clean([original??m.text,m.attachment?"[attachment] "+m.attachment:""].filter(Boolean).join("\n"));
++        if(!text) continue;
++        notes.push({key:m.id,text,ref:ref?.startsWith("m")?ref:undefined,block:coverage.get(m.id),retrieve:original!==undefined,label:metadata(m),corrects:typeof m.corrects==="string"?m.corrects:undefined});
++    }
++    const messageCount=notes.length;
++    for(const block of session.state.blocks){
++        if(block.active)continue; // active summaries already have their own ranked section
++        notes.push({key:"summary/"+block.blockId,text:clean([block.topic,block.summary].filter(Boolean).join("\n")),label:"historical inactive summary; block time="+block.createdAt,block:block.blockId});
++    }
++    const identity=(n: Note)=>"ev-"+hash(session.id+"\0"+n.key+"\0"+n.text);
++    const cite=(n:Note)=>`${clean(n.key).slice(0,160)}${n.ref?" "+n.ref:""}${n.block?" "+n.block:""} ${n.label}`;
++    if(read){
++        const n=notes.find(n=>identity(n)===read[1]);
++        if(!n)return "[Original evidence unavailable or changed in this session; repeat the keyword search.]";
++        const offset=Number(read[2]||0);
++        if(offset>=n.text.length)return "[Original evidence page is beyond the end.]";
++        const body=safePrefix(n.text.slice(offset),pageSize);
++        return `[Evidence: ${cite(n)} | ${offset}–${offset+body.length}/${n.text.length}]\n${body}`+(offset+body.length<n.text.length?`\n[next query: open:${read[1]}:${offset+body.length}]`:"");
++    }
++
++    const hits:Hit[]=[];
++    function consider(note:Note,order:number) {
++        if(selectedIds&&!selectedIds.has(note.key)&&note.key!=="summary/"+target?.blockId)return;
++        const body=note.text.toLowerCase();let score=0,at=-1;
++        for(const t of terms){const i=body.indexOf(t);if(i>=0){score++;if(at<0)at=i;}}
++        if(score===0)return;
++        if(body.includes(searchText)) score+=terms.length;
++        hits.push({note,score,at,order});
++    }
++    notes.forEach(consider);
++    hits.sort((a,b)=>b.score-a.score||b.order-a.order);
++    const renderHit=({note,order,at}:Hit)=>{
++        const start=Math.max(0,at-90);
++        const nearby=order<messageCount?[order-1,order+1].filter(i=>i>=0&&i<messageCount).map(i=>`  ${i<order?"previous":"next"}: ${cite(notes[i]!)} — ${safePrefix(notes[i]!.text,125)}`):[];
++        const correctedBy=notes.filter(n=>n.corrects&&(n.corrects===note.key||n.corrects===note.ref)).slice(-3);
++        return [cite(note),`  ${start?"…":""}${safePrefix(note.text.slice(start),270)}`,
++            `  read: open:${identity(note)}:${start}`+(note.retrieve&&note.ref?` | acp_retrieve(${note.ref})`:""),
++            ...(note.corrects?["  corrects: "+clean(note.corrects).slice(0,120)]:[]),
++            ...correctedBy.map(n=>"  explicitly corrected by "+cite(n)),...nearby].join("\n");
++    };
++    const lines=hits.slice(0,limit).map(renderHit);
++    // Legacy full caches flattened speaker headers into arbitrary message text.
++    // Without typed records we can locate the block, but cannot authenticate
++    // individual message boundaries or safely quote private reasoning from it.
++    let legacy=0;
++    for(const b of session.state.blocks){
++        if(target&&b.blockId!==target.blockId)continue;
++        if(!b.effectiveMessageIds.some(id=>!messages.has(id)))continue;
++        const view=session.blockContents.get(b.blockId)?.full;
++        if(!view?.text)continue;
++        const searchable=clean(view.text).toLowerCase();
++        if(!terms.every(t=>searchable.includes(t)))continue;
++        if(legacy++>=Math.min(3,limit))break;
++        const ids=new Set(b.effectiveMessageIds);
++        const exact=hits.find(hit=>ids.has(hit.note.key)&&terms.every(t=>hit.note.text.toLowerCase().includes(t)));
++        if(exact)lines.push(`${b.blockId} [archived original match]\n${renderHit(exact)}`);
++        else lines.push(`${b.blockId} [flattened archive locator; original speaker/time unavailable], inspect block via decompress; no attributable quote.`);
++    }
++    return lines.length ? `Own-session historical evidence (keyword search; order and neighboring statements alone do not establish a correction):\n${lines.join("\n\n")}`:"";
++}
 diff --git a/src/server.ts b/src/server.ts
-index ccea8cf..62b965c 100644
+index ccea8cf4283cbfbe89a426b8be096fda2b3b768a..0f92a1083c24b4d8635c0bf719352ca4eea4d00e 100644
 --- a/src/server.ts
 +++ b/src/server.ts
-@@ -1,3 +1,4 @@
-+import { collaborativeEnabled, collaborativePlanningEnabled } from "./collaborative-transaction.js";
+@@ -1,3 +1,5 @@
++import { startBackgroundFold, takeBackgroundFold } from "./collaborative-background.js";
++import { cancelBackgroundFold, collaborativeEnabled, collaborativePlanningEnabled } from "./collaborative-transaction.js";
  import http from "node:http";
  import fs from "node:fs";
  import path from "node:path";
-@@ -3443,8 +3444,8 @@ export async function preflightCompressIfNeeded(
+@@ -3385,6 +3387,11 @@ export async function preflightCompressIfNeeded(
+     instanceId: string,
+ ): Promise<Prepared | PreflightFailFast> {
+     const session = prepared.session;
++    const collaborative = collaborativeEnabled(config);
++    const backgroundKey = collaborative ? JSON.stringify([model, route?.upstream, prepared.protocol, config]) : "";
++    const backgroundCtx = () => ({ core, config, session, messages: prepared.originalMessages, lastNudge: prepared.nudge, log: (message:string) => log("info", `[${session.id}] ${message}`) });
++    if (collaborative && takeBackgroundFold(backgroundCtx(), backgroundKey)) prepared = await runPrepare();
++    if (!collaborative) await cancelBackgroundFold(session);
+     // #3450: when an upstream-stated overflow proved this provider bills the
+     // COMPLETION against the same wall ("N in the messages, N in the
+     // completion"), the foldable quantity is MESSAGES — every payload-vs-wall
+@@ -3443,8 +3450,8 @@ export async function preflightCompressIfNeeded(
      const autoFoldTarget = autoFoldOn
          ? Math.min(Math.max(Math.max(AUTO_FOLD_TARGET_MIN, Math.min((config as ResolvedKernelConfig).externalSummary?.autoFoldTargetTokens ?? (overflowTarget > 0 ? Math.round(overflowTarget / 2) : 0), overflowTarget)), measuredFloor ?? 0), overflowTarget)
          : undefined;
@@ -741,7 +1192,7 @@ index ccea8cf..62b965c 100644
      // A fresh session (id rotated, e.g. after a model switch) has
      // lastInputTokens = 0 while still carrying a full raw history; size the
      // trigger on the real post-fold payload too. outboundPayloadBreakdown is the
-@@ -3534,7 +3535,8 @@ export async function preflightCompressIfNeeded(
+@@ -3534,7 +3541,8 @@ export async function preflightCompressIfNeeded(
      // Image-dominant payloads keep the original unconditional arm: images are
      // not foldable, so their overage is not "expected benefit" at all.
      const growthWorthIt = !growthArmed || imageTokens >= compressionTarget || decisionTrigger - textBudget >= AUTO_FOLD_MIN_BENEFIT_TOKENS;
@@ -751,7 +1202,20 @@ index ccea8cf..62b965c 100644
      // #2283 sub-defect 2: pair upstream billing with the same-payload local estimate on
      // EVERY request (not only when preflight triggers) — the offline data source for the
      // chars/4 deviation distribution behind the #2273 RC2 calibration decision.
-@@ -3790,7 +3792,8 @@ export async function preflightCompressIfNeeded(
+@@ -3753,6 +3761,12 @@ export async function preflightCompressIfNeeded(
+     // provider-billed baseline and the (calibrated) local estimate — so a
+     // false trigger is diagnosable from the log alone instead of requiring a
+     // cross-reference between gate and nudge lines.
++    if (collaborative && !hardPressure && payloadFitsWindow) {
++        const ranges = (prepared.nudge?.compressibleRanges ?? []).filter(r => (r.chars ?? r.tokens * 4) >= config.compress.minCompressRange);
++        startBackgroundFold(backgroundCtx(), ranges, backgroundKey);
++        return prepared;
++    }
++    if (collaborative) await cancelBackgroundFold(session);
+     log("warn", `[${session.id}] context ${tokenCount} tokens reached preflight target ${compressionTarget}${growthArmed ? " (auto-fold growth floor)" : ""}${completionReserve > 0 ? ` (window ${config.modelContextLimit} minus proven completion reservation ${completionReserve})` : ""} (model window ${limit}, model=${model}; usage-baseline=${baselineFloor > 0 ? baselineFloor : "none"} local-est=${Math.round(calibratedText)}${kFactor !== undefined ? ` raw=${Math.round(textEstimate + overheadEstimate)} k̂=${kFactor.toFixed(2)}` : ""}); preflight compressing before forward`);
+     // #300: stamp the chain marker so a downstream bili skips these
+     // summarization calls too (preflight always processes).
+@@ -3790,7 +3804,8 @@ export async function preflightCompressIfNeeded(
                  core,
                  session,
                  config,
@@ -761,7 +1225,7 @@ index ccea8cf..62b965c 100644
                  compressReason: growthArmed ? "growth" : "overflow",
                  prompts: prepared.prompts ?? defaultPrompts,
                  surface: prepared.surface,
-@@ -3942,7 +3945,7 @@ export async function preflightCompressIfNeeded(
+@@ -3942,7 +3957,7 @@ export async function preflightCompressIfNeeded(
              } else {
                  log("warn", `[${session.id}] preflight made no progress but the payload fits; forwarding as-is`);
              }
@@ -771,7 +1235,7 @@ index ccea8cf..62b965c 100644
              // less than its fixed cost — same economics as a zero-progress pass,
              // so arm the same cooldown instead of paying per-request for
 diff --git a/src/session.ts b/src/session.ts
-index d1083ee..5023fd9 100644
+index d1083ee4d7663fe4f8105737dfe5d61b393fc043..5023fd9601951e1e03e277010331abb6e8a67619 100644
 --- a/src/session.ts
 +++ b/src/session.ts
 @@ -1404,9 +1404,11 @@ export function snapshotMessages(session: Session, messages: CoreMessage[]): voi
@@ -787,8 +1251,68 @@ index d1083ee..5023fd9 100644
  }
  
  /** Record original block content at compress time. */
+diff --git a/src/storage/shadow.ts b/src/storage/shadow.ts
+index aec7da44eb14d223d916d72c909411b309dd1586..592abc022111d65f17c96c08d589df5a95ddc0ac 100644
+--- a/src/storage/shadow.ts
++++ b/src/storage/shadow.ts
+@@ -769,6 +769,12 @@ export class UnifiedShadow {
+         return this.sync.uncoveredRows(sessionId, intervals);
+     }
+ 
++    searchableTranscript(sessionId: string) {
++        if (!this.sync) return [];
++        this.assertLive();
++        return this.sync.searchableTranscript(sessionId);
++    }
++
+     tailViewRows(sessionId: string): MessageRow[] {
+         if (this.sync === null) return [];
+         this.assertLive();
+diff --git a/src/storage/store.ts b/src/storage/store.ts
+index 0cab41538d5f0fdc495006c015d36c85e99f50af..f723da6a286a73e8a7d8934ca535b68fb40086d7 100644
+--- a/src/storage/store.ts
++++ b/src/storage/store.ts
+@@ -87,6 +87,11 @@ export interface SessionRow {
+     orphansJson?: string | null;
+ }
+ 
++export interface SearchTranscriptRow {
++    id: string; role: string; contentType: string; text?: string | null; toolName?: string | null;
++    timestamp?: string | number | null; sourceKind?: string | null; corrects?: string | null; attachment?: string | null;
++}
++
+ export interface MessageRow {
+     seq: number;
+     msgId: string;
+@@ -1437,6 +1442,26 @@ export class UnifiedStore {
+      *  so "gone from the window" must not read as "gone". Unknown refs simply
+      *  come back absent; retired rows (rewound/undo history) stay excluded,
+      *  matching every other view-lane reader. */
++    /** Text-only projection for own-session keyword recall. Media CAS bytes are never hydrated. */
++    searchableTranscript(sessionId: string): SearchTranscriptRow[] {
++        return this.db.prepare(`
++            SELECT m.msg_id AS id, m.role, m.kind AS contentType,
++                   json_extract(CAST(c.bytes AS TEXT), '$.text') AS text,
++                   json_extract(CAST(c.bytes AS TEXT), '$.toolName') AS toolName,
++                   json_extract(CAST(c.bytes AS TEXT), '$.timestamp') AS timestamp,
++                   json_extract(CAST(c.bytes AS TEXT), '$.source.kind') AS sourceKind,
++                   json_extract(CAST(c.bytes AS TEXT), '$.corrects') AS corrects,
++                   coalesce(json_extract(CAST(c.bytes AS TEXT), '$.attachment.description'),
++                            json_extract(CAST(c.bytes AS TEXT), '$.rawAnthropicBlock.title'),
++                            json_extract(CAST(c.bytes AS TEXT), '$.rawResponsesItem.filename'),
++                            json_extract(CAST(c.bytes AS TEXT), '$.imageMediaType')) AS attachment
++            FROM messages m JOIN content c ON c.hash=m.content_hash
++            WHERE m.session_id=? AND m.retired_at IS NULL AND m.role IN ('user','assistant','tool')
++              AND m.kind != 'reasoning' AND json_valid(CAST(c.bytes AS TEXT))
++            ORDER BY m.seq
++        `).all(sessionId) as SearchTranscriptRow[];
++    }
++
+     messageContentByRefNums(sessionId: string, refNums: readonly number[]): MessageRefContentRow[] {
+         if (refNums.length === 0) return [];
+         const nums = [...new Set(refNums)];
 diff --git a/src/stream.ts b/src/stream.ts
-index f32641f..94a64f5 100644
+index f32641fc9bc393e6aabaf8b087b630908a789f39..94a64f5ed6921d49bbbb41a33f943189ff12965d 100644
 --- a/src/stream.ts
 +++ b/src/stream.ts
 @@ -21,6 +21,7 @@ import { applyConfiguredCompression } from "./external-summary-compress.js";
@@ -800,7 +1324,7 @@ index f32641f..94a64f5 100644
      config: Config;
      messages: CoreMessage[];
 diff --git a/src/thirdparty-scan.ts b/src/thirdparty-scan.ts
-index 6fc46fc..57e0c30 100644
+index 6fc46fce44c542d4b24f6d8bb97a3e5113d52f01..57e0c306735c247331942d58afdf59dd63628cdd 100644
 --- a/src/thirdparty-scan.ts
 +++ b/src/thirdparty-scan.ts
 @@ -202,6 +202,8 @@ export function isOpencodeAcpEntry(entry: string): boolean {
@@ -814,10 +1338,10 @@ index 6fc46fc..57e0c30 100644
      // replacement or compression handler (#2324).
 diff --git a/tests/collaborative-transaction.test.ts b/tests/collaborative-transaction.test.ts
 new file mode 100644
-index 0000000..9dda82a
+index 0000000000000000000000000000000000000000..67046fc84630a5ebcd26a8cc34658d3eee44df06
 --- /dev/null
 +++ b/tests/collaborative-transaction.test.ts
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,282 @@
 +import { getStore, SessionStore } from "../src/persist.ts";
 +import fs from 'node:fs';
 +import os from 'node:os';
@@ -1030,8 +1554,78 @@ index 0000000..9dda82a
 +  assert.equal(manual,false);assert.equal(trigger,'tool');
 + },(_n,metadata)=>{trigger=metadata?.trigger;return true;},input=>{manual=(input as {manual?:boolean}).manual;return {decision:'now',ranges:input.candidates,reason:'fixture'};});
 +});
++
++
++test("background review lets the same session append during model work and commits only its verified range",async()=>{
++ const {startBackgroundFold,takeBackgroundFold}=await import("../src/collaborative-background.ts");
++ let plans=0, summaries=0;
++ await fixture(async ctx=>{
++  const offered=ctx.core.processTurn({messages:ctx.messages,state:ctx.session.state,config:ctx.config,tokenCount:30000,renderTags:"text-only"}).nudge!.compressibleRanges;
++  startBackgroundFold(ctx,offered,"route/a");startBackgroundFold(ctx,offered,"route/a");
++  assert.equal(ctx.session.state.blocks.length,0);
++  const appended: CoreMessage={id:"later",role:"user",contentType:"text",text:"A later instruction"};
++  ctx.messages.push(appended);ctx.session.lastMessages=[...ctx.messages];
++  ctx.session.state=ctx.core.processTurn({messages:ctx.messages,state:ctx.session.state,config:ctx.config,tokenCount:30001,renderTags:"text-only"}).state;markDirty(ctx.session);
++  let applied=false;const deadline=Date.now()+4000;
++  while(!applied&&Date.now()<deadline){await new Promise(r=>setTimeout(r,15));applied=takeBackgroundFold(ctx,"route/a");}
++  assert.ok(applied,"validated batch did not publish");assert.equal(plans,1);assert.equal(summaries,1);
++  assert.equal(ctx.session.lastMessages.at(-1),appended);
++  assert.ok(!ctx.session.state.blocks[0].effectiveMessageIds.includes("later"));
++  assert.match(ctx.session.blockContents.get(ctx.session.state.blocks[0].blockId)!.full.text,/November/);
++  assert.equal(takeBackgroundFold(ctx,"route/a"),false);
++ },()=>{summaries++;return true;},input=>{plans++;return {decision:"now",ranges:input.candidates.slice(0,1),reason:"finished"};});
++});
++test("background commit waits for closed tools and rejects edited original",async()=>{
++ const {startBackgroundFold,takeBackgroundFold}=await import("../src/collaborative-background.ts");
++ await fixture(async ctx=>{
++  const logs:string[]=[];const live={...ctx,log:(m:string)=>logs.push(m)};
++  const offered=ctx.core.processTurn({messages:ctx.messages,state:ctx.session.state,config:ctx.config,tokenCount:30000,renderTags:"text-only"}).nudge!.compressibleRanges;
++  startBackgroundFold(live,offered,"route");
++  ctx.messages.push({id:"call",role:"assistant",contentType:"tool-call",toolCallId:"x",toolName:"read"});
++  await new Promise(r=>setTimeout(r,150));assert.equal(takeBackgroundFold(live,"route"),false);
++  ctx.messages.push({id:"result",role:"tool",contentType:"tool-result",toolCallId:"x",text:"done"});
++  ctx.messages[0]={...ctx.messages[0],text:"Edited before publish"};
++  const deadline=Date.now()+4000;while(!logs.some(m=>m.includes("discarded"))&&Date.now()<deadline){
++   assert.equal(takeBackgroundFold(live,"route"),false);await new Promise(r=>setTimeout(r,15));
++  }
++  assert.ok(logs.some(m=>m.includes("Covered message")));assert.equal(ctx.session.state.blocks.length,0);
++ },()=>true,input=>({decision:"now",ranges:input.candidates.slice(0,1),reason:"done"}));
++});
++
++test("DSH anthropic prepare and HTTP preflight forward the first turn then reprepare the appended turn with reviewed history",async()=>{
++ const {prepareAnthropic}=await import("../src/server/prepare-anthropic.ts");
++ const {preflightCompressIfNeeded}=await import("../src/server.ts");
++ const {loadOptions}=await import("../src/config.ts");
++ const {Socket}=await import("node:net");
++ let summaries=0;
++ await fixture(async ctx=>{
++   const opts=loadOptions({BILI_CONFIG_FILE:path.join(os.tmpdir(),"no-config-"+Math.random())});
++   const req=new http.IncomingMessage(new Socket());req.url="/v1/messages";req.method="POST";req.headers={"x-bili-plugin":"dsh"};
++   const wire=ctx.messages.map(m=>({role:m.role as "user"|"assistant",content:m.text!}));
++   ctx.session=createSession("actual-wire-"+Math.random());const logs:string[]=[];
++   const prepare=()=>prepareAnthropic({model:"deepseek-flash",messages:wire,max_tokens:1000},req,opts,ctx.core,ctx.config,defaultPrompts,{},(_l,m)=>logs.push(m),ctx.session,true,"https://api.deepseek.com",undefined,false);
++   const gate=async()=>{const prepared=await prepare();return preflightCompressIfNeeded(prepared,prepare,req,Buffer.from(prepared.body),new http.ServerResponse(req),opts,ctx.core,ctx.config,400000,"deepseek-flash",undefined,undefined,undefined,undefined,false,(_l,m)=>logs.push(m),"test");};
++   const first=await gate();assert.ok("body" in first);assert.equal(summaries,0);assert.equal(ctx.session.state.blocks.length,0);
++   wire.push({role:"assistant",content:"Prepared the next task."},{role:"user",content:"New, still visible instruction."});
++   const deadline=Date.now()+3500;
++   while(summaries===0&&Date.now()<deadline)await new Promise(r=>setTimeout(r,20));
++   assert.ok(summaries>0,logs.slice(-6).join("\n"));await new Promise(r=>setTimeout(r,50));
++   const second=await gate();assert.ok("body" in second);assert.ok(ctx.session.state.blocks.length>0,logs.slice(-10).join("\n"));
++   const body=String(second.body);assert.ok(body.includes("New, still visible instruction."));assert.ok(body.includes(SUMMARY.slice(0,30)));
++   const {cancelBackgroundFold}=await import("../src/collaborative-transaction.ts");await cancelBackgroundFold(ctx.session);
++ },()=>{summaries++;return true;},input=>({decision:"now",ranges:input.candidates.slice(0,1),reason:"done"}));
++});
++test("background wait never loads lazy block originals",async()=>{
++ const {startBackgroundFold}=await import("../src/collaborative-background.ts");let plans=0,loads=0;
++ await fixture(async ctx=>{
++   ctx.session.blockContents=new LazyBlockContents(ctx.session.id,{b1:{full:{count:1,text:"fake prior"}}} as any,()=>{loads++;return {};});
++   const offered=ctx.core.processTurn({messages:ctx.messages,state:ctx.session.state,config:ctx.config,tokenCount:30000,renderTags:"text-only"}).nudge!.compressibleRanges;
++   startBackgroundFold(ctx,offered,"route");await new Promise(r=>setTimeout(r,80));startBackgroundFold(ctx,offered,"route");
++   assert.equal(plans,1);assert.equal(loads,0);
++ },()=>false,()=>{plans++;return {decision:"wait",ranges:[],reason:"not yet"};});
++});
 diff --git a/tests/dsh-native.test.ts b/tests/dsh-native.test.ts
-index d1c76b4..e087408 100644
+index d1c76b43ee1e0a62dc74663ca86c887d16357081..e087408bf75a13421bff38ce5f8f341c32af39e5 100644
 --- a/tests/dsh-native.test.ts
 +++ b/tests/dsh-native.test.ts
 @@ -526,8 +526,8 @@ function mockBiliHandler(toolCalls: Array<{ conversationId: string; tool: string
@@ -1082,8 +1676,78 @@ index d1c76b4..e087408 100644
 +  assert.equal(calls[0].tool,'compress');assert.deepEqual(calls[0].args,{content:[{startId:'m00001',endId:'m00009'}]});assert.equal((calls[0] as {compactCommand?:boolean}).compactCommand,true);
 + });}finally{proxy.close();_resetRegisterForTest(undefined);rmrf(home);}
 +});
+diff --git a/tests/search-context-cross-session.test.ts b/tests/search-context-cross-session.test.ts
+index 2e8f71de9315c17d26133c306faa2f13b3bf967f..025ea371961145682555fe35fa405510958f7a57 100644
+--- a/tests/search-context-cross-session.test.ts
++++ b/tests/search-context-cross-session.test.ts
+@@ -187,13 +187,15 @@ test("#841 resident historical session served from memory without disk", () => {
+ test("#841 cold-loaded historical session: read-only, file untouched, no save scheduled", async () => {
+     _resetSessionsForTest();
+     const dir = mkdtempSync(path.join(tmpdir(), "bili-xsearch-"));
++    const writer = new SessionStore({ dir, enabled: true, debounceMs: 0 });
++    let reader: SessionStore | undefined;
+     try {
+-        const writer = new SessionStore({ dir, enabled: true, debounceMs: 0 });
+         const old = makeSession("pfa-old");
+         compressInto(old);
+         await writer.writeNow(old);
+ 
+-        const reader = new SessionStore({ dir, enabled: true, debounceMs: 0 });
++        writer.closeQuietly();
++        reader = new SessionStore({ dir, enabled: true, debounceMs: 0 });
+         await reader.boot();
+         _setStoreForTest(reader);
+ 
+@@ -219,6 +221,8 @@ test("#841 cold-loaded historical session: read-only, file untouched, no save sc
+     } finally {
+         _setStoreForTest(new SessionStore({ enabled: false }));
+         _resetSessionsForTest();
++        reader?.closeQuietly();
++        writer.closeQuietly();
+         rmrf(dir);
+     }
+ });
+diff --git a/tests/search-original-evidence.test.ts b/tests/search-original-evidence.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..14a9ce0d812743cf49584df9fd67c68e85c303ed
+--- /dev/null
++++ b/tests/search-original-evidence.test.ts
+@@ -0,0 +1,33 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { createCore, createInitialState, defaultConfig, type CoreMessage } from "acp-kernel";
++import {executeSearchContextTarget} from "../src/decompress-shared.js";
++import type {Session} from "../src/session.js";
++
++const msg=(id:string,text:string,role:CoreMessage["role"]="user"):CoreMessage=>({id,text,role,contentType:"text"});
++function fixture(){
++ const state=createInitialState();
++ const session={id:"search-fixture-local",state,metadata:{},stats:{},blockContents:new Map(),lastMessages:[
++  {...msg("old","draft setting "+"x ".repeat(1300)+"needle_one 4011"),source:{kind:"user"},timestamp:"2026-11-03T10:00:00Z"},
++  {...msg("attach","[image]","tool"),attachment:{description:"bluepaper attachment description"}},
++  {...msg("revised","Actually disabled."),corrects:"old"},
++  {...msg("internal","【内部提醒】task-complete"),source:{kind:"plugin:agency"}},
++  {...msg("thinking","PRIVATE_INFERENCE","assistant"),contentType:"reasoning"},
++  msg("preface","PRIVATE_SYSTEM","system"),msg("secrets","sensitive token=abcdef__123456789"),
++ ]} as unknown as Session;
++ state.messageRefs.byRaw["old"]="m00001";
++ const ctx={session,config:defaultConfig(200000),messages:session.lastMessages!,log:()=>{}};
++ return {session,run:(query:string)=>executeSearchContextTarget({query,limit:2},createCore(),session.id,state,ctx).text};
++}
++test("current session searches original terms, attachment descriptions, contextual neighbors and attributed corrections",()=>{
++ const {run}=fixture();const hit=run("needle_one");assert.match(hit,/old m00001 role=user source=user time=2026/);assert.match(hit,/explicitly corrected by revised/);assert.match(hit,/next: attach/);
++ const target=hit.match(/read: (open:ev-[a-f0-9]+:\d+)/)![1]!;assert.match(run(target),/needle_one 4011/);assert.doesNotMatch(hit,/acp_retrieve/);
++ assert.match(run("bluepaper"),/\[attachment\] bluepaper/);assert.match(run("task-complete"),/source=plugin:agency/);
++ assert.doesNotMatch(run("PRIVATE_"),/role=(system|assistant)|private_system|private_inference/i);
++ assert.match(run("sensitive"),/<masked/);assert.doesNotMatch(run("sensitive"),/abcdef__123456789/);
++});
++test("read handles cannot cross sessions or silently read a changed original",()=>{
++ const {run,session}=fixture(),target=run("needle_one").match(/read: (open:ev-[a-f0-9]+:\d+)/)![1]!;
++ session.id="other";assert.match(run(target),/unavailable or changed/);session.id="search-fixture-local";
++ session.lastMessages![0]!.text="new version";assert.match(run(target),/unavailable or changed/);
++});
 diff --git a/tsup.config.ts b/tsup.config.ts
-index f77884f..fcd0b67 100644
+index f77884f5d942f20894822f4215f06eab549a8df9..fcd0b67e62961475838f00b83fcdfed9e65669d6 100644
 --- a/tsup.config.ts
 +++ b/tsup.config.ts
 @@ -4,7 +4,7 @@ import { defineConfig } from "tsup";

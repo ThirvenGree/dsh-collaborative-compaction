@@ -23,6 +23,12 @@ async function validateEngine(engine) {
  const chain = schema.parseExternalSummaryChain(engine.compress.externalSummary);
  schema.parseExternalSummarySettings(schema.expandExternalSummaryChain(chain,engine.providers));
 }
+function retrievalPolicy(){
+ try{
+  const c=read(engineConfigFile()).compress?.ccr;
+  return {enabled:c?.enabled===true,minToolTokens:c?.minToolTokens??4000,tool:c?.toolName??'acp_retrieve'};
+ }catch{return {enabled:null};}
+}
 function fileBytes(file){return fs.existsSync(file)?fs.readFileSync(file):null;}
 function digest(bytes){return bytes===null?null:createHash('sha256').update(bytes).digest('hex');}
 function journalFile(){return engineConfigFile()+'.collab-transaction.json';}
@@ -220,7 +226,7 @@ export function apply(ctx){
   const host=req.headers.host||'',origin=req.headers.origin;
   if(!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)||Number(host.slice(host.lastIndexOf(':')+1))!==req.socket.localPort||req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==`http://${host}`)){reply(res,403,{error:'Forbidden'});return;}
   try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}const input=await body(req);if(!port)throw Error("Listener not ready");await saveSettings(input.changes??input,port,token,validateEngine,input.expected);ready();}else if(req.method!=='GET'){reply(res,405,{});return;}
-   reply(res,200,{config:config(),csrf,health,runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
+   reply(res,200,{config:config(),csrf,health,retrieval:retrievalPolicy(),runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
   }catch(e){reply(res,400,{error:e.message});}
  }}));
 }
