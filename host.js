@@ -5,10 +5,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {randomUUID,timingSafeEqual,randomBytes,createHash} from 'node:crypto';
-import {config,validateConfig,dataRoot,activeProfile,recoverRuns,runs,runPipeline,planCompression} from './runtime.js';
+import {config,validateConfig,dataRoot,defaultRoot,activeProfile,migrateProfile,recoverRuns,runs,runPipeline,planCompression} from './runtime.js';
 export const name='collaborative-compaction';
 export const inject=['webServer','llm'];
 const route='/dsh-collaborative-compaction';
+const listeners=new Map();
 export function engineConfigFile(){return process.env.BILI_CONFIG_FILE?path.resolve(process.env.BILI_CONFIG_FILE):path.join(process.env.XDG_CONFIG_HOME?path.resolve(process.env.XDG_CONFIG_HOME):path.join(os.homedir(),'.config'),'billion-context','billion-context.json');}
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 function write(p,v){fs.mkdirSync(path.dirname(p),{recursive:true});const t=p+'.'+randomUUID()+'.tmp';try{fs.writeFileSync(t,JSON.stringify(v,null,2),{mode:0o600});fs.renameSync(t,p);}finally{fs.rmSync(t,{force:true});}}
@@ -77,7 +78,13 @@ function commitFiles(changes){
 async function guarded(action){
  const filename=engineConfigFile();
  const key=digest(Buffer.from(process.platform==='win32'?filename.toLowerCase():filename)).slice(0,24);
- const address=process.platform==='win32'?'\\\\.\\pipe\\dsh-config-'+key:path.join(os.tmpdir(),'dsh-config-'+key+'.sock');
+ // Kernel-owned endpoints disappear even on process.exit or SIGKILL.
+ // Darwin lacks abstract Unix sockets. A port collision fails closed.
+ const name='dsh-config-'+key;
+ let address;
+ if(process.platform==='win32')address='\\\\.\\pipe\\'+name;
+ else if(process.platform==='linux')address='\0'+name;
+ else address={host:'127.0.0.1',port:20000+parseInt(key.slice(0,8),16)%20000,exclusive:true};
  const lock=net.createServer(socket=>socket.destroy());
  await new Promise((resolve,reject)=>{lock.once('error',reject);lock.listen(address,resolve);});
  try {
@@ -90,6 +97,35 @@ async function guarded(action){
   return result;
  }finally{await new Promise(resolve=>lock.close(resolve));}
 }
+async function endpointInactive(base){
+ let endpoint;
+ try{endpoint=new URL(base);}catch{return false;}
+ if(endpoint.protocol!=='http:'||endpoint.hostname!=='127.0.0.1'||!endpoint.port)return false;
+ return new Promise(resolve=>{
+  const socket=net.createConnection({host:'127.0.0.1',port:Number(endpoint.port)});
+  function finish(inactive){socket.destroy();resolve(inactive);}
+  socket.once('connect',()=>finish(false));
+  socket.once('error',error=>finish(error.code==='ECONNREFUSED'));
+  socket.setTimeout(1000,()=>finish(false));
+ });
+}
+function findPriorSnapshot(backup,oldToken){
+ if(fs.existsSync(backup))return read(backup);
+ const marker=path.join(defaultRoot,'installed-engine.json');
+ const registration=fs.existsSync(marker)?read(marker):{};
+ const profiles=registration.profiles??[registration.profilePath];
+ const roots=[defaultRoot,...profiles.filter(p=>typeof p==='string'&&path.isAbsolute(p)).map(p=>path.join(p,'collaborative-compaction'))];
+ const matches=new Map();
+ for(const root of new Set(roots)){
+  const snapshot=path.join(root,path.basename(backup));
+  if(fs.existsSync(snapshot)&&fileBytes(path.join(root,'local-token'))?.toString()===oldToken){
+   const content=read(snapshot);
+   matches.set(JSON.stringify(content),content);
+  }
+ }
+ if(matches.size===1)return matches.values().next().value;
+ throw Error('Cannot identify the original engine configuration backup; restore the original profile snapshot before takeover');
+}
 async function engineChanges(c,port,token,validate,shutdown=false) {
  const changes=new Map();
  const biliFile=engineConfigFile(),old=fs.existsSync(biliFile)?read(biliFile):{};
@@ -98,13 +134,20 @@ async function engineChanges(c,port,token,validate,shutdown=false) {
  if(!c.enabled&&!owned)return changes;
  const credentials=biliFile+'.summary-credentials.json',keys=fs.existsSync(credentials)?read(credentials):{};
  const providerName='dsh-collaborative';
- if(owned&&keys[providerName]!==token)throw Error('Engine configuration belongs to a different plugin instance');
- if(shutdown&&owned&&old.providers?.[providerName]?.baseUrl!==`http://127.0.0.1:${port}/v1`)return changes;
+ const priorEndpoint=old.providers?.[providerName]?.baseUrl;
+ const sameEndpoint=priorEndpoint===`http://127.0.0.1:${port}/v1`;
+ if(shutdown&&owned&&(!sameEndpoint||keys[providerName]!==token))return changes;
+ const currentListener=sameEndpoint && listeners.get(port)===token;
+ if(owned&&!currentListener&&(!sameEndpoint||keys[providerName]!==token)&&!(await endpointInactive(priorEndpoint)))
+  throw Error('Engine configuration belongs to a live or unverifiable plugin instance');
  let saved;
  if(c.enabled&&!owned){
   saved=structuredClone({compress:old.compress||{},provider:old.providers?.['dsh-collaborative']||null,credential:keys[providerName]??null});
   changes.set(backup,saved);
- }else saved=read(backup);
+ }else {
+  saved=findPriorSnapshot(backup,keys[providerName]);
+  if(c.enabled&&!fs.existsSync(backup))changes.set(backup,saved);
+ }
  old.compress||={};old.providers||={};
  if(c.enabled){
   keys['dsh-collaborative']=token;changes.set(credentials,keys);
@@ -140,6 +183,7 @@ export async function body(req,limit=9_000_000){const chunks=[];let n=0;for awai
 
 function reply(res,status,data){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data));}
 export function apply(ctx){
+ migrateProfile();
  fs.mkdirSync(dataRoot,{recursive:true});let token;const tokenFile=path.join(dataRoot,'local-token');if(fs.existsSync(tokenFile))token=fs.readFileSync(tokenFile,'utf8');else{token=randomBytes(32).toString('hex');fs.writeFileSync(tokenFile,token,{mode:0o600});}
  recoverRuns();
  const csrf=randomBytes(32).toString('hex');let port=0,health='starting';const pending=new Set();
@@ -170,8 +214,8 @@ export function apply(ctx){
   }catch(e){reply(res,422,{error:String(e.message).slice(0,250)});}finally{pending.delete(abort);}
  });
  server.on('error',e=>{health='listener failed: '+e.code;});
- server.listen(0,'127.0.0.1',async()=>{port=server.address().port;try{await syncEngine(config,port,token);ready();}catch(e){health='engine config failed: '+e.message;}});
- ctx.effect(()=>async()=>{for(const c of pending)c.abort(Error("Host stopping"));server.close();try{await syncEngine(()=>({...config(),enabled:false}),port,token,validateEngine,true);}catch{}});
+ server.listen(0,'127.0.0.1',async()=>{port=server.address().port;listeners.set(port,token);try{await syncEngine(config,port,token);ready();}catch(e){health='engine config failed: '+e.message;}});
+ ctx.effect(()=>async()=>{for(const c of pending)c.abort(Error("Host stopping"));listeners.delete(port);server.close();try{await syncEngine(()=>({...config(),enabled:false}),port,token,validateEngine,true);}catch{}});
  ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/state',handler:async(req,res)=>{
   const host=req.headers.host||'',origin=req.headers.origin;
   if(!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)||Number(host.slice(host.lastIndexOf(':')+1))!==req.socket.localPort||req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==`http://${host}`)){reply(res,403,{error:'Forbidden'});return;}

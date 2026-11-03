@@ -17,7 +17,7 @@ index acbbd53..bfc5f63 100644
 +
 +- `src/collaborative-planner.ts`: authenticated local model planning; validates suggested ranges before engine preview.
 diff --git a/src/agent/dsh-native.ts b/src/agent/dsh-native.ts
-index 779ec5f..28d18d8 100644
+index 779ec5f..c049d6e 100644
 --- a/src/agent/dsh-native.ts
 +++ b/src/agent/dsh-native.ts
 @@ -57,7 +57,7 @@ import { ensureProxyRunning, LAUNCHER_DEFAULT_HOST, requestInstanceShutdown } fr
@@ -29,7 +29,21 @@ index 779ec5f..28d18d8 100644
  import { decodeRequestBody } from "../content-encoding.js";
  import { dshContextTabEnabled, dshContextTabLabel, limitsDecodedBytes } from "../knobs.js";
  import { MIN_ASSUMED_WINDOW_TOKENS } from "../util.js";
-@@ -2678,6 +2678,29 @@ export function apply(ctx: PluginContext): void {
+@@ -920,7 +920,12 @@ function toolDefinition(tool: ManifestTool): ToolDefinition {
+             if (typeof sid !== "string" || sid.length === 0) {
+                 throw new Error(`bili tool ${tool.name} requires an owning agent session`);
+             }
+-            const out = await forwardTool(base, sid, tool.name, args, exec.signal, true);
++            const forwardedArgs = { ...args };
++            if (tool.name === "compress") {
++                delete forwardedArgs.collaborativeManualRetry;
++                delete forwardedArgs.compactCommand;
++            }
++            const out = await forwardTool(base, sid, tool.name, forwardedArgs, exec.signal, true);
+             // #2204: dsh tool results are plain strings — a business failure
+             // throws so the host renders an error, not success text.
+             if (out.failed) throw new Error(out.text);
+@@ -2678,6 +2683,29 @@ export function apply(ctx: PluginContext): void {
          description: "Prompt-cache reconciliation (same report as the acp_cache tool)",
          handler: (invocation) => cacheOutcome(ctx, invocation),
      });
@@ -49,7 +63,7 @@ index 779ec5f..28d18d8 100644
 +                const ranges = candidates.filter((item: { tokens?: unknown }) => typeof item.tokens === "number" && item.tokens > 0)
 +                    .map((item: { startRef?: unknown; endRef?: unknown }) => ({ startId: item.startRef, endId: item.endRef }));
 +                if (ranges.length === 0) return { kind: "success", text: "No eligible history outside the protected recent region; nothing changed." };
-+                const result = await forwardTool(base, sid, "compress", { content: ranges, collaborativeManualRetry: true }, invocation?.signal, true);
++                const result = await forwardTool(base, sid, "compress", { content: ranges }, invocation?.signal, true, undefined, true);
 +                return { kind: result.failed ? "error" : "success", text: result.text };
 +            } catch {
 +                return { kind: "error", text: "Collaborative compression failed; originals retained. Check stage diagnostics in settings." };
@@ -59,6 +73,22 @@ index 779ec5f..28d18d8 100644
  
      // node:test drives apply() directly with a mock ctx — never patch
      // globalThis.fetch from inside a test run.
+diff --git a/src/agent/shared.ts b/src/agent/shared.ts
+index 9770212..4e00325 100644
+--- a/src/agent/shared.ts
++++ b/src/agent/shared.ts
+@@ -376,8 +376,9 @@ export async function reportAttributionHealth(proxyBase: string, health: Attribu
+  *  partial note in `text`. Absent on legacy envelopes without the fields. */
+ export type ForwardedToolResult = { text: string; failed: boolean; outcome?: ToolOutcomeKind; blocksCreated?: number };
+ 
+-export async function forwardTool(proxyBase: string, conversationId: string, tool: string, args: unknown, signal?: AbortSignal, nativeCaller: boolean = false, toolCallId?: string): Promise<ForwardedToolResult> {
+-    const body: { conversationId: string; tool: string; args: unknown; nativeCaller?: boolean; toolCallId?: string } = { conversationId, tool, args: args ?? {} };
++export async function forwardTool(proxyBase: string, conversationId: string, tool: string, args: unknown, signal?: AbortSignal, nativeCaller: boolean = false, toolCallId?: string, compactCommand = false): Promise<ForwardedToolResult> {
++    const body: { conversationId: string; tool: string; args: unknown; nativeCaller?: boolean; toolCallId?: string; compactCommand?: boolean } = { conversationId, tool, args: args ?? {} };
++    if(compactCommand && nativeCaller && tool==="compress")body.compactCommand=true;
+     if (toolCallId !== undefined) body.toolCallId = toolCallId;
+     // #2072: host-native agents (pi / dsh / opencode) stamp a per-call id minted
+     // by the host's own session manager — declare it so a stale sibling witness
 diff --git a/src/collaborative-planner.ts b/src/collaborative-planner.ts
 new file mode 100644
 index 0000000..3ee2f51
@@ -190,7 +220,7 @@ index 0000000..a2b4c12
 +
 +export function collaborativePlanningEnabled(config: unknown): boolean { return collaborativeEnabled(config) && (config as ResolvedKernelConfig).externalSummary?.modelPlanning !== false; }
 diff --git a/src/external-summary-compress.ts b/src/external-summary-compress.ts
-index 24c0d21..772b2f7 100644
+index 24c0d21..f54da07 100644
 --- a/src/external-summary-compress.ts
 +++ b/src/external-summary-compress.ts
 @@ -1,3 +1,4 @@
@@ -224,12 +254,12 @@ index 24c0d21..772b2f7 100644
 +            const parsed = parseCompressInput(withOptionalSummaries(input), callId);
 +            if (parsed.diagnostics.invalidItems > 0 || !parsed.ranges.length) throw new Error("Invalid input ranges");
 +            stage = "planning";
-+            const decision = await planHistory(ctx.config as ResolvedKernelConfig, transaction.draft, ctx.compressMessages ?? ctx.messages, parsed.ranges.map(r=>({startId:r.startRef,endId:r.endRef})), (input as {collaborativeManualRetry?: boolean})?.collaborativeManualRetry === true, signal);
++            const decision = await planHistory(ctx.config as ResolvedKernelConfig, transaction.draft, ctx.compressMessages ?? ctx.messages, parsed.ranges.map(r=>({startId:r.startRef,endId:r.endRef})), ctx.compactCommand === true, signal);
 +            if (decision.decision === "wait" || decision.decision === "uncertain") return compressResult("[Compression deferred by model: " + decision.decision + ". Nothing changed.]", "refused", 0);
 +            if (decision.decision === "now") selected = {content: decision.ranges};
 +        }
 +        stage = "generation";
-+        const result = await applyConfiguredCompressionInner(selected, { ...ctx, session: transaction.draft }, callId, signal, planned ? "auto" : (input as {collaborativeManualRetry?: boolean})?.collaborativeManualRetry === true ? "manual" : "tool", pressure);
++        const result = await applyConfiguredCompressionInner(selected, { ...ctx, session: transaction.draft }, callId, signal, planned ? "auto" : ctx.compactCommand === true ? "manual" : "tool", pressure);
 +        if (result.outcome !== "applied" || signal?.aborted) {
 +            const detail = result.outcome === "refused" ? result.text : "Cancelled or incomplete batch";
 +            return compressResult(`[Compression FAILED: request=${requestId} stage=${stage}] ${detail} Originals retained.`, "refused", 0);
@@ -448,6 +478,42 @@ index 622eceb..7447c5f 100644
      readonly content: string;
      readonly instructions: string;
      readonly reference?: string;
+diff --git a/src/loop/core.ts b/src/loop/core.ts
+index c103051..2a82b17 100644
+--- a/src/loop/core.ts
++++ b/src/loop/core.ts
+@@ -182,6 +182,7 @@ function activeAbsorbToolName(session: Session, config: Config): string | undefi
+ const MALFORMED_PROXY_TOOL_ARGS_REPLAY = '{"_bili":"model produced non-JSON tool-call arguments; replaced with this valid placeholder so the continuation request stays parseable — see the tool result"}';
+ 
+ export interface LoopCtx {
++    compactCommand?: boolean;
+     core: CompressionCore;
+     config: Config;
+     messages: CoreMessage[];
+diff --git a/src/plugin.ts b/src/plugin.ts
+index ec497fb..4f764e9 100644
+--- a/src/plugin.ts
++++ b/src/plugin.ts
+@@ -1887,9 +1887,9 @@ export async function handlePluginTool(
+     res: import("node:http").ServerResponse,
+     deps: PluginToolDeps,
+ ): Promise<void> {
+-    let parsed: { conversationId?: unknown; tool?: unknown; args?: unknown; expectedRevision?: unknown; nativeCaller?: unknown; toolCallId?: unknown };
++    let parsed: { conversationId?: unknown; tool?: unknown; args?: unknown; expectedRevision?: unknown; nativeCaller?: unknown; toolCallId?: unknown; compactCommand?: unknown };
+     try {
+-        parsed = JSON.parse(payload) as { conversationId?: unknown; tool?: unknown; args?: unknown; expectedRevision?: unknown; nativeCaller?: unknown; toolCallId?: unknown };
++        parsed = JSON.parse(payload) as { conversationId?: unknown; tool?: unknown; args?: unknown; expectedRevision?: unknown; nativeCaller?: unknown; toolCallId?: unknown; compactCommand?: unknown };
+         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("expected tool object");
+     } catch {
+         res.writeHead(400, { "content-type": "application/json" });
+@@ -2134,6 +2134,7 @@ export async function handlePluginTool(
+             const compressBefore = session.lastCompress;
+             const pendingBefore = new Set(session.pendingRetrievals.map((p) => p.ref));
+             const toolResult = await executeProxyToolAsync(tool, args, {
++                compactCommand: nativeCaller && tool==="compress" && parsed.compactCommand===true,
+                 core: deps.core,
+                 // #833: run proxy tools under the session's last resolved Config
+                 // (same values the wire path used), not the base kernelConfig.
 diff --git a/src/preflight.ts b/src/preflight.ts
 index 0af1155..00b9120 100644
 --- a/src/preflight.ts
@@ -721,6 +787,18 @@ index d1083ee..5023fd9 100644
  }
  
  /** Record original block content at compress time. */
+diff --git a/src/stream.ts b/src/stream.ts
+index f32641f..94a64f5 100644
+--- a/src/stream.ts
++++ b/src/stream.ts
+@@ -21,6 +21,7 @@ import { applyConfiguredCompression } from "./external-summary-compress.js";
+ import { describeUncoveredRuns, shortTokenCount, uncoveredHistoryRuns } from "./uncovered.js";
+ 
+ export type RewriteCtx = {
++    compactCommand?: boolean;
+     core: CompressionCore;
+     config: Config;
+     messages: CoreMessage[];
 diff --git a/src/thirdparty-scan.ts b/src/thirdparty-scan.ts
 index 6fc46fc..57e0c30 100644
 --- a/src/thirdparty-scan.ts
@@ -736,10 +814,10 @@ index 6fc46fc..57e0c30 100644
      // replacement or compression handler (#2324).
 diff --git a/tests/collaborative-transaction.test.ts b/tests/collaborative-transaction.test.ts
 new file mode 100644
-index 0000000..00b5de4
+index 0000000..9dda82a
 --- /dev/null
 +++ b/tests/collaborative-transaction.test.ts
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,212 @@
 +import { getStore, SessionStore } from "../src/persist.ts";
 +import fs from 'node:fs';
 +import os from 'node:os';
@@ -943,10 +1021,30 @@ index 0000000..00b5de4
 +        } finally { store.cancelAll(); }
 +    });
 +});
++
++test('model arguments cannot impersonate the slash command in planning or generation',async()=>{
++ let manual:boolean|undefined,trigger:string|undefined;
++ await fixture(async ctx=>{
++  const result=await applyConfiguredCompression({...args(ctx),collaborativeManualRetry:true,compactCommand:true},ctx);
++  assert.equal(result.outcome,'applied',result.text);
++  assert.equal(manual,false);assert.equal(trigger,'tool');
++ },(_n,metadata)=>{trigger=metadata?.trigger;return true;},input=>{manual=(input as {manual?:boolean}).manual;return {decision:'now',ranges:input.candidates,reason:'fixture'};});
++});
 diff --git a/tests/dsh-native.test.ts b/tests/dsh-native.test.ts
-index d1c76b4..d7aa6ce 100644
+index d1c76b4..e087408 100644
 --- a/tests/dsh-native.test.ts
 +++ b/tests/dsh-native.test.ts
+@@ -526,8 +526,8 @@ function mockBiliHandler(toolCalls: Array<{ conversationId: string; tool: string
+             let body = "";
+             req.on("data", (c) => (body += c));
+             req.on("end", () => {
+-                const parsed = JSON.parse(body) as { conversationId?: string; tool?: string; args?: unknown; nativeCaller?: unknown };
+-                toolCalls.push({ conversationId: parsed.conversationId ?? "", tool: parsed.tool ?? "", args: parsed.args, ...(parsed.nativeCaller === true ? { nativeCaller: true } : {}) });
++                const parsed = JSON.parse(body) as { conversationId?: string; tool?: string; args?: unknown; nativeCaller?: unknown; compactCommand?: boolean };
++                toolCalls.push({ conversationId: parsed.conversationId ?? "", tool: parsed.tool ?? "", args: parsed.args, ...(parsed.compactCommand ? {compactCommand:true}:{}), ...(parsed.nativeCaller === true ? { nativeCaller: true } : {}) });
+                 res.writeHead(200, { "content-type": "application/json" });
+                 res.end(JSON.stringify({ ok: true, result: "compressed 42 tokens" }));
+             });
 @@ -716,7 +716,7 @@ test("apply() attach mode: registers manifest tools verbatim, gates headers, for
              const ctx = mockCtx();
              apply(ctx);
@@ -981,7 +1079,7 @@ index d1c76b4..d7aa6ce 100644
 +  const result=await cmd.handler({agent:{session:{id:'isolated-manual'}}});
 +  assert.equal(result.kind,'success',result.text);
 +  assert.equal(calls.length,1);assert.equal(calls[0].conversationId,'isolated-manual');
-+  assert.equal(calls[0].tool,'compress');assert.deepEqual(calls[0].args,{content:[{startId:'m00001',endId:'m00009'}],collaborativeManualRetry:true});
++  assert.equal(calls[0].tool,'compress');assert.deepEqual(calls[0].args,{content:[{startId:'m00001',endId:'m00009'}]});assert.equal((calls[0] as {compactCommand?:boolean}).compactCommand,true);
 + });}finally{proxy.close();_resetRegisterForTest(undefined);rmrf(home);}
 +});
 diff --git a/tsup.config.ts b/tsup.config.ts

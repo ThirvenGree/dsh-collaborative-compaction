@@ -7,7 +7,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 const exec=promisify(execFile);
-const defaultRoot=path.join(os.homedir(),'.dsh','collaborative-compaction');
+export const defaultRoot=path.join(os.homedir(),'.dsh','collaborative-compaction');
 const desktop=path.join(process.env.DSH_HOME||path.join(os.homedir(),'.dsh'),'profiles','desktop');
 function findProfile(){
  if(process.env.DSH_COLLAB_TEST_HOME)return;
@@ -16,12 +16,36 @@ function findProfile(){
  const marker=path.join(defaultRoot,'installed-engine.json');
  if(!fs.existsSync(marker))return desktop;
  const registration=JSON.parse(fs.readFileSync(marker,'utf8'));
- if(registration.profiles?.length>1)throw Error('Multiple DSH profiles installed: specify DSH_PROFILE_DIR for this process');
+ // Older launchers omit the profile hint; the installer records its most recent selection.
  return registration.profilePath||desktop;
 }
 export const activeProfile=findProfile();
 const normalizeProfile=p=>process.platform==='win32'?path.resolve(p).toLowerCase():path.resolve(p);
 export const dataRoot=process.env.DSH_COLLAB_TEST_HOME||(normalizeProfile(activeProfile)===normalizeProfile(desktop)?defaultRoot:path.join(activeProfile,'collaborative-compaction'));
+
+// Copy only settings belonging to the legacy profile. Newer destination files win.
+export function migrateProfile(root=dataRoot,profile=activeProfile,legacy=defaultRoot){
+ if(!profile || normalizeProfile(root)===normalizeProfile(legacy))return;
+ const marker=path.join(legacy,'installed-engine.json');
+ if(!fs.existsSync(marker))return;
+ const registration=JSON.parse(fs.readFileSync(marker,'utf8'));
+ const owner=registration.legacyProfilePath??registration.profilePath;
+ if(!owner || normalizeProfile(owner)!==normalizeProfile(profile))return;
+ const done=path.join(root,'.legacy-migration-v1');
+ if(fs.existsSync(done))return;
+ fs.mkdirSync(root,{recursive:true,mode:0o700});
+ for(const name of fs.readdirSync(legacy)){
+  if(!['local-token','config.json'].includes(name)&&!/^engine-before-[a-f0-9]{16}\.json$/.test(name))continue;
+  const target=path.join(root,name);
+  if(fs.existsSync(target))continue;
+  const temp=target+'.'+randomUUID()+'.tmp';
+  try{
+   fs.writeFileSync(temp,fs.readFileSync(path.join(legacy,name)),{flag:'wx',mode:0o600});
+   try{fs.linkSync(temp,target);}catch(e){if(e.code!=='EEXIST')throw e;}
+  }finally{fs.rmSync(temp,{force:true});}
+ }
+ fs.writeFileSync(done,'1',{mode:0o600});
+}
 
 export const defaults={enabled:false,claudeEnabled:true,reviewEnabled:true,plannerEnabled:true,plannerModel:'gpt-6.1-terra',factCheckEnabled:true,verificationProvider:'claude',verificationModel:'claude-sonnet-5-5',aProvider:'deepseek-account',aModel:'deepseek-flash',claudeModel:'claude-sonnet-5-5',claudeBase:'https://api.anthropic.com/v1',claudeKeyEnv:'ANTHROPIC_API_KEY',reviewModel:'gpt-6.1-terra',reviewBase:'https://api.openai.com/v1',reviewKeyEnv:'OPENAI_API_KEY',reasoningEffort:'medium',timeoutMs:540000,plannerTimeoutMs:30000,plannerOutputTokens:2048,claudeOutputTokens:24576,reviewOutputTokens:49152,verificationOutputTokens:16384,verificationMaxFacts:24,retries:1,maxSummaryChars:12000,claudeContextTokens:1000000,reviewContextTokens:1050000,outputTokens:16384,preserveRecentTokens:16000,autoFoldTargetTokens:80000};
 export function config(){try{const saved=JSON.parse(fs.readFileSync(path.join(dataRoot,'config.json'),'utf8'));if(saved.verificationProvider===undefined&&saved.verificationModel?.startsWith('gpt-'))saved.verificationProvider='openai';if(Number.isInteger(saved.autoFoldTargetTokens)&&saved.autoFoldTargetTokens>=2000&&saved.autoFoldTargetTokens<8192)saved.autoFoldTargetTokens=8192;return validateConfig({...defaults,...saved});}catch(e){if(e.code==='ENOENT')return {...defaults};throw e;}}

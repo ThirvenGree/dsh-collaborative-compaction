@@ -95,3 +95,35 @@ test('next process recovers a settings transaction interrupted after the engine 
  assert.equal(recovered.status,0,recovered.stderr);assert.equal(fs.readFileSync(file,'utf8'),original);
  assert.deepEqual(fs.readdirSync(dir),['engine.json']);
 });
+
+test('live ownership blocks token takeover; once stopped both takeover and disable recover the baseline',async()=>{
+ const net=await import('node:net');const dir=process.env.DSH_COLLAB_TEST_HOME;
+ const engine=path.join(dir,'owner-test.json');process.env.BILI_CONFIG_FILE=engine;
+ fs.writeFileSync(engine,JSON.stringify({compress:{preserveRecentTokens:7123}}));
+ const server=net.createServer(socket=>socket.end());await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const port=server.address().port;
+ try{
+  await syncEngine({enabled:true},port,'old');
+  for(const enabled of [true,false])await assert.rejects(syncEngine({enabled},port+1,'replacement'),/live or unverifiable/);
+  await new Promise(r=>server.close(r));
+  await syncEngine({enabled:true},port,'replacement');
+  await syncEngine({enabled:false},port,'third-after-token-loss');
+  assert.deepEqual(JSON.parse(fs.readFileSync(engine)).compress,{preserveRecentTokens:7123});
+ }finally{if(server.listening)await new Promise(r=>server.close(r));delete process.env.BILI_CONFIG_FILE;}
+});
+test('multi-profile import uses last install; legacy data follows original profile once',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'profile-home-'));
+ const legacy=path.join(dir,'.dsh','collaborative-compaction'),owner=path.join(dir,'owner'),other=path.join(dir,'other');
+ fs.mkdirSync(legacy,{recursive:true});
+ for(const [name,data] of Object.entries({'local-token':'PRIVATE_FIXTURE','config.json':'{"enabled":true}','engine-before-0123456789abcdef.json':'{}','host.json':'{}'}))fs.writeFileSync(path.join(legacy,name),data);
+ fs.writeFileSync(path.join(legacy,'installed-engine.json'),JSON.stringify({profilePath:other,legacyProfilePath:owner,profiles:[owner,other]}));
+ const env={...process.env,HOME:dir,USERPROFILE:dir};delete env.DSH_COLLAB_TEST_HOME;delete env.DSH_PROFILE_DIR;
+ const moduleURL=JSON.stringify(new URL('../runtime.js',import.meta.url).href);
+ function run(extra){const proc=spawnSync(process.execPath,['--input-type=module','-e',`import {activeProfile,migrateProfile} from ${moduleURL};migrateProfile();console.log(activeProfile)`],{env:{...env,...extra},cwd:dir,encoding:'utf8'});assert.equal(proc.status,0,proc.stderr);return proc.stdout.trim();}
+ assert.equal(run({}),other);assert.ok(!fs.existsSync(path.join(other,'collaborative-compaction','local-token')));
+ assert.equal(run({DSH_PROFILE_DIR:owner}),owner);
+ const dest=path.join(owner,'collaborative-compaction');assert.equal(fs.readFileSync(path.join(dest,'local-token'),'utf8'),'PRIVATE_FIXTURE');
+ assert.equal(fs.readFileSync(path.join(dest,'config.json'),'utf8'),'{"enabled":true}');assert.ok(fs.existsSync(path.join(dest,'engine-before-0123456789abcdef.json')));
+ assert.ok(!fs.existsSync(path.join(dest,'host.json')));fs.unlinkSync(path.join(dest,'local-token'));run({DSH_PROFILE_DIR:owner});assert.ok(!fs.existsSync(path.join(dest,'local-token')));
+});

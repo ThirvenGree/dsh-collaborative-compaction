@@ -51,12 +51,14 @@ if($manifest.dsh.profile.bundles -notcontains 'dsh-collaborative-compaction'){$m
 $dataDir=Join-Path $HOME '.dsh/collaborative-compaction'
 $marker=Join-Path $dataDir 'installed-engine.json'
 $known=@()
+$legacyProfile=$profileDir
 if(Test-Path -LiteralPath $marker){
  $previous=Get-Content -Raw -LiteralPath $marker | ConvertFrom-Json
+ if($previous.legacyProfilePath){$legacyProfile=$previous.legacyProfilePath}elseif($previous.profilePath){$legacyProfile=$previous.profilePath}
  $known=@($previous.profiles)+@($previous.profilePath)
 }
 $known=@(@($known)+@($profileDir) | Where-Object {$_} | Sort-Object -Unique)
-$changes=@{$marker=(@{enginePath=$repo;profilePath=$profileDir;profiles=$known} | ConvertTo-Json)}
+$changes=@{$marker=(@{enginePath=$repo;profilePath=$profileDir;profiles=$known;legacyProfilePath=$legacyProfile} | ConvertTo-Json)}
 foreach($lock in @((Join-Path $profileDir 'pnpm-lock.yaml'),(Join-Path $profileDir 'node_modules/.pnpm/lock.yaml'))){
  if(Test-Path -LiteralPath $lock){
   $value=[IO.File]::ReadAllText($lock)
