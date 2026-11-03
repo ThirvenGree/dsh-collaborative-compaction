@@ -1,4 +1,4 @@
-import {createRequire} from 'node:module';
+import {pathToFileURL} from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,10 +11,13 @@ const route='/dsh-collaborative-compaction';
 export function engineConfigFile(){return process.env.BILI_CONFIG_FILE?path.resolve(process.env.BILI_CONFIG_FILE):path.join(process.env.XDG_CONFIG_HOME?path.resolve(process.env.XDG_CONFIG_HOME):path.join(os.homedir(),'.config'),'billion-context','billion-context.json');}
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 function write(p,v){fs.mkdirSync(path.dirname(p),{recursive:true});const t=p+'.'+randomUUID()+'.tmp';fs.writeFileSync(t,JSON.stringify(v,null,2),{mode:0o600});fs.renameSync(t,p);}
-function validateEngine(engine) {
- const profile = process.env.DSH_PROFILE_DIR || process.argv.find(arg=>path.isAbsolute(arg) && fs.existsSync(path.join(arg,'node_modules','billion-context','dist','external-summary-settings.js'))) || path.join(process.env.DSH_HOME || path.join(os.homedir(),'.dsh'),'profiles','desktop');
- const require = createRequire(import.meta.url);
- const schema = require(path.join(profile,'node_modules','billion-context','dist','external-summary-settings.js'));
+async function validateEngine(engine) {
+ const relative=path.join('dist','external-summary-settings.js');
+ const profile=process.env.DSH_PROFILE_DIR || process.argv.find(arg=>path.isAbsolute(arg)&&fs.existsSync(path.join(arg,'node_modules','billion-context',relative)));
+ const marker=path.join(dataRoot,'installed-engine.json');
+ const root=profile?path.join(profile,'node_modules','billion-context'):fs.existsSync(marker)?read(marker).enginePath:path.join(process.env.DSH_HOME||path.join(os.homedir(),'.dsh'),'profiles','desktop','node_modules','billion-context');
+ if(typeof root!=='string'||!path.isAbsolute(root))throw Error('Invalid installed engine path; rerun install.ps1');
+ const schema=await import(pathToFileURL(path.join(root,relative)).href);
  const chain = schema.parseExternalSummaryChain(engine.compress.externalSummary);
  schema.parseExternalSummarySettings(schema.expandExternalSummaryChain(chain,engine.providers));
 }
@@ -49,7 +52,7 @@ function commitFiles(changes) {
   for(const item of prepared) fs.rmSync(item.temp,{force:true});
  }
 }
-function engineChanges(c,port,token,validate) {
+async function engineChanges(c,port,token,validate) {
  const changes=new Map();
  const biliFile=engineConfigFile(),old=fs.existsSync(biliFile)?read(biliFile):{};
  const backup=path.join(dataRoot,'engine-before-'+createHash('sha256').update(biliFile).digest('hex').slice(0,16)+'.json');
@@ -66,7 +69,7 @@ function engineChanges(c,port,token,validate) {
   keys['dsh-collaborative']=token;changes.set(credentials,keys);
   old.providers['dsh-collaborative']={baseUrl:`http://127.0.0.1:${port}/v1`,api:'openai',credentialRef:'dsh-collaborative',models:{'dsh-collaborative-v1':{contextWindow:1000000,outputTokens:c.outputTokens,stream:false}}};
   Object.assign(old.compress,{externalSummary:{enabled:true,targets:['dsh-collaborative/dsh-collaborative-v1'],budget:{totalTimeoutMs:c.timeoutMs+20000,targetTimeoutMs:c.timeoutMs+10000,maxSummaryBytes:c.maxSummaryChars*4+4096},concurrency:1,modelPlanning:c.plannerEnabled,autoFold:true,autoFoldTargetTokens:c.autoFoldTargetTokens},preserveRecentTokens:c.preserveRecentTokens,maxSummaryLength:c.maxSummaryChars});
-  validate(old);
+  await validate(old);
  }else{
   for(const k of ['externalSummary','preserveRecentTokens','maxSummaryLength'])if(k in saved.compress)old.compress[k]=saved.compress[k];else delete old.compress[k];
   if(saved.provider)old.providers['dsh-collaborative']=saved.provider;else delete old.providers['dsh-collaborative'];
@@ -74,15 +77,18 @@ function engineChanges(c,port,token,validate) {
  changes.set(biliFile,old);
  return changes;
 }
+let configQueue=Promise.resolve();
+function serialized(fn){const result=configQueue.then(fn);configQueue=result.catch(()=>{});return result;}
 export function syncEngine(c,port,token,validate=validateEngine){
- commitFiles(engineChanges(validateConfig(c),port,token,validate));
+ return serialized(async()=>commitFiles(await engineChanges(validateConfig(c),port,token,validate)));
 }
 export function saveSettings(value,port,token,validate=validateEngine){
+ return serialized(async()=>{
  const next=validateConfig({...config(),...value});
- const changes=engineChanges(next,port,token,validate);
+ const changes=await engineChanges(next,port,token,validate);
  changes.set(path.join(dataRoot,'config.json'),next);
  commitFiles(changes);
- return next;
+ return next;});
 }
 export async function body(req,limit=9_000_000){const chunks=[];let n=0;for await(const part of req){const p=Buffer.isBuffer(part)?part:Buffer.from(part);n+=p.length;if(n>limit)throw Error('Request too large');chunks.push(p);}return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,n)));}
 
@@ -114,12 +120,12 @@ export function apply(ctx){
   }catch(e){reply(res,422,{error:String(e.message).slice(0,250)});}finally{pending.delete(abort);}
  });
  server.on('error',e=>{health='listener failed: '+e.code;});
- server.listen(0,'127.0.0.1',()=>{port=server.address().port;try{syncEngine(config(),port,token);health='ready';write(path.join(dataRoot,'host.json'),{port,pid:process.pid,at:Date.now()});}catch(e){health='engine config failed: '+e.message;}});
- ctx.effect(()=>()=>{for(const c of pending)c.abort(Error("Host stopping"));server.close();try{syncEngine({...config(),enabled:false},port,token);}catch{}});
+ server.listen(0,'127.0.0.1',async()=>{port=server.address().port;try{await syncEngine(config(),port,token);health='ready';write(path.join(dataRoot,'host.json'),{port,pid:process.pid,at:Date.now()});}catch(e){health='engine config failed: '+e.message;}});
+ ctx.effect(()=>async()=>{for(const c of pending)c.abort(Error("Host stopping"));server.close();try{await syncEngine({...config(),enabled:false},port,token);}catch{}});
  ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/state',handler:async(req,res)=>{
   const host=req.headers.host||'',origin=req.headers.origin;
   if(!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)||Number(host.slice(host.lastIndexOf(':')+1))!==req.socket.localPort||req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==`http://${host}`)){reply(res,403,{error:'Forbidden'});return;}
-  try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}saveSettings(await body(req),port,token);}else if(req.method!=='GET'){reply(res,405,{});return;}
+  try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}await saveSettings(await body(req),port,token);}else if(req.method!=='GET'){reply(res,405,{});return;}
    reply(res,200,{config:config(),csrf,health,runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
   }catch(e){reply(res,400,{error:e.message});}
  }}));

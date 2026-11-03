@@ -11,19 +11,19 @@ test('680k Chinese characters survive byte boundaries and byte limit is enforced
  await assert.rejects(body(chunks(),bytes.length-1),/too large/);
  async function* bad(){yield Buffer.from([123,34,120,34,58,34,0xff,34,125]);}await assert.rejects(body(bad()));
 });
-test('disabled never-owned config stays untouched; each enable captures fresh baseline',()=>{
+test('disabled never-owned config stays untouched; each enable captures fresh baseline',async()=>{
  const file=path.join(process.env.DSH_COLLAB_TEST_HOME,'engine.json');process.env.BILI_CONFIG_FILE=file;
  const put=v=>fs.writeFileSync(file,JSON.stringify(v));const get=()=>JSON.parse(fs.readFileSync(file));
  const baseline={compress:{preserveRecentTokens:123,maxSummaryLength:456},providers:{other:{keep:true}}};put(baseline);
- syncEngine({enabled:false},1,'fake');assert.deepEqual(get(),baseline);
+ await syncEngine({enabled:false},1,'fake');assert.deepEqual(get(),baseline);
  const enabled={enabled:true,timeoutMs:540000,maxSummaryChars:12000,outputTokens:16384,preserveRecentTokens:16000,plannerEnabled:true,autoFoldTargetTokens:80000};
- syncEngine(enabled,1,'fake');syncEngine({...enabled,enabled:false},1,'fake');assert.deepEqual(get(),baseline);
- baseline.compress.preserveRecentTokens=999;put(baseline);syncEngine(enabled,1,'fake');syncEngine({...enabled,enabled:false},1,'fake');assert.deepEqual(get(),baseline);
- syncEngine(enabled,1,'fake');const manual={compress:{externalSummary:{enabled:true,targets:['other/model']},preserveRecentTokens:42}};put(manual);syncEngine({enabled:false},1,'fake');assert.deepEqual(get(),manual);
+ await syncEngine(enabled,1,'fake');await syncEngine({...enabled,enabled:false},1,'fake');assert.deepEqual(get(),baseline);
+ baseline.compress.preserveRecentTokens=999;put(baseline);await syncEngine(enabled,1,'fake');await syncEngine({...enabled,enabled:false},1,'fake');assert.deepEqual(get(),baseline);
+ await syncEngine(enabled,1,'fake');const manual={compress:{externalSummary:{enabled:true,targets:['other/model']},preserveRecentTokens:42}};put(manual);await syncEngine({enabled:false},1,'fake');assert.deepEqual(get(),manual);
  delete process.env.BILI_CONFIG_FILE;
 });
 
-test('all four settings commit steps roll back to their exact previous bytes',()=>{
+test('all four settings commit steps roll back to their exact previous bytes',async()=>{
  const dir=process.env.DSH_COLLAB_TEST_HOME;
  const file=path.join(dir,'rollback-engine.json');
  process.env.BILI_CONFIG_FILE=file;
@@ -38,15 +38,15 @@ test('all four settings commit steps roll back to their exact previous bytes',()
    const rename=fs.renameSync;let n=0;
    try {
     fs.renameSync=(...args)=>{if(++n===failAt)throw Error('injected rename failure');return rename(...args);};
-    assert.throws(()=>saveSettings({enabled:true},1,'fake',testSchema),/injected/);
+    await assert.rejects(()=>saveSettings({enabled:true},1,'fake',testSchema),/injected/);
    } finally {fs.renameSync=rename;}
    assert.deepEqual(snapshot(),original);
   }
-  assert.throws(()=>saveSettings({enabled:true},1,'fake',()=>{throw Error('schema rejected')}),/schema rejected/);
+  await assert.rejects(()=>saveSettings({enabled:true},1,'fake',()=>{throw Error('schema rejected')}),/schema rejected/);
   assert.deepEqual(snapshot(),original);
   fs.writeFileSync(credentials,'broken');
   const malformed=snapshot();
-  assert.throws(()=>saveSettings({enabled:true},1,'fake',testSchema));
+  await assert.rejects(()=>saveSettings({enabled:true},1,'fake',testSchema));
   assert.deepEqual(snapshot(),malformed);
  }finally{delete process.env.BILI_CONFIG_FILE;}
 });
@@ -54,4 +54,15 @@ test('plugin accepts exactly the engine fold-target interval',async()=>{
  const {validateConfig}=await import('../runtime.js');
  for(const value of [2000,4096,8191,10000001,8192.5]) assert.throws(()=>validateConfig({autoFoldTargetTokens:value}));
  for(const value of [8192,80000,10000000]) assert.equal(validateConfig({autoFoldTargetTokens:value}).autoFoldTargetTokens,value);
+});
+
+test('custom install loads ESM validator with top-level await',async()=>{
+ const dir=process.env.DSH_COLLAB_TEST_HOME,root=path.join(dir,'custom # engine');
+ fs.mkdirSync(path.join(root,'dist'),{recursive:true});
+ fs.writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
+ fs.writeFileSync(path.join(root,'dist','external-summary-settings.js'),"await Promise.resolve();export const parseExternalSummaryChain=x=>x,expandExternalSummaryChain=x=>x,parseExternalSummarySettings=()=>{throw Error('custom schema invoked')}");
+ fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:root}));
+ const profile=process.env.DSH_PROFILE_DIR;delete process.env.DSH_PROFILE_DIR;process.env.BILI_CONFIG_FILE=path.join(dir,'custom.json');
+ try{await assert.rejects(sync({enabled:true},1,'fake'),/custom schema invoked/);}
+ finally{delete process.env.BILI_CONFIG_FILE;if(profile!==undefined)process.env.DSH_PROFILE_DIR=profile;}
 });

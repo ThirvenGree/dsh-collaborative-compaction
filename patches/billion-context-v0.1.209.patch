@@ -412,7 +412,7 @@ index 622eceb..567b84e 100644
      readonly instructions: string;
      readonly reference?: string;
 diff --git a/src/preflight.ts b/src/preflight.ts
-index 0af1155..1fe85b8 100644
+index 0af1155..68cb8a5 100644
 --- a/src/preflight.ts
 +++ b/src/preflight.ts
 @@ -1,3 +1,4 @@
@@ -430,7 +430,24 @@ index 0af1155..1fe85b8 100644
  
  // #247: proactive pre-forward compression. When the session's real context
  // (previous turn's upstream input_tokens) exceeds the current model's window
-@@ -1480,6 +1484,7 @@ function readDeterministicProbeState(metadata: Record<string, unknown>): Determi
+@@ -261,6 +265,7 @@ export interface PreflightDeps {
+     forceStreamSummary?: boolean;
+     /** One external-summary deadline shared by every range/chunk in this invocation. */
+     externalSummary?: ConfiguredSummaryPlan;
++    onCollaborativeFailure?: (receipt:string)=>void;
+     /** #2155: compress.streamSummary resolved FALSE for this request (explicit operator opt-out anywhere in the cascade). Neither learn path (400 "stream required" nor the 524/504 gateway-timeout first-hit learn) may arm, and an already-armed session flag is ignored — the operator said this upstream must never stream summaries. */
+     streamSummaryOff?: boolean;
+     /** #2189: the client's billing-attribution block from the INBOUND anthropic system (extractBillingAttributionBlock). Carried into every summary call as system[0]; absent → legacy string system unchanged. */
+@@ -1238,7 +1243,7 @@ async function summarizeRange(deps: PreflightDeps, content: string, startRef: st
+         `\n\nTASK: The conversation segment below (messages ${startRef}–${endRef}) must be compressed because the session context exceeds the current model's window. Write a tier-1 compression summary of the segment following every rule above. Output ONLY the summary text — no preamble, no closing remarks, no tool calls.` +
+         summaryLengthBudgetClause(lengthBudget, MIN_SUMMARY_CHARS);
+     if (deps.externalSummary) {
+-        const batch = await deps.externalSummary.summarize([{ instructions: system, content, minSummaryChars: MIN_SUMMARY_CHARS,
++        const batch = await deps.externalSummary.summarize([{ onCollaborativeFailure:deps.onCollaborativeFailure, instructions: system, content, minSummaryChars: MIN_SUMMARY_CHARS,
+             maxSummaryChars: deps.config.compress.maxSummaryLength }], deps.signal);
+         const result = batch.results[0];
+         // Observability parity with the model-tool path (external-summary-compress
+@@ -1480,6 +1485,7 @@ function readDeterministicProbeState(metadata: Record<string, unknown>): Determi
  // oldest content becomes foldable. The hard protectedTools exclusion is
  // computed independently of preserveRecent* and still applies.
  function relaxedConfig(config: Config): Config {
@@ -438,7 +455,7 @@ index 0af1155..1fe85b8 100644
      return { ...config, preserveRecentMessages: 0, preserveRecentTokens: 0 };
  }
  
-@@ -1614,7 +1619,75 @@ export function deterministicDigest(entries: DigestEntry[], startRef: string, en
+@@ -1614,7 +1620,79 @@ export function deterministicDigest(entries: DigestEntry[], startRef: string, en
      return `${marker} ${"x".repeat(pad)}`;
  }
  
@@ -454,9 +471,11 @@ index 0af1155..1fe85b8 100644
 +function collaborativeBackoff(session:Session){const until=session.metadata?.autoFoldBackoffUntil;return typeof until==="number"&&until>Date.now();}
  export async function preflightCompress(deps: PreflightDeps, messages: CoreMessage[]): Promise<PreflightResult> {
 +    if (!collaborativeEnabled(deps.config)) return preflightCompressInner(deps, messages);
-+    const plan = deps.externalSummary ?? configuredSummaryPlan((deps.config as ResolvedKernelConfig).externalSummary, deps.session.id);
++    const receipts=new Set<string>();
++    const collect=(text:string)=>{for(const m of text.matchAll(/run=[0-9a-f-]{36} stage=(?:A|B|review|fact-check|pipeline|planning|backoff)\b/g))receipts.add(m[0]);};
 +    let transaction: ReturnType<typeof compressionDraft> | undefined;
 +    try {
++        const plan = deps.externalSummary ?? configuredSummaryPlan((deps.config as ResolvedKernelConfig).externalSummary, deps.session.id);
 +        let preferredRanges=0, preferredSavings=0;
 +        if(collaborativePlanningEnabled(deps.config)){
 +            const originalState=deps.session.state, epoch=deps.session.revisionEpoch;
@@ -481,13 +500,14 @@ index 0af1155..1fe85b8 100644
 +                    decision=epochConfirmPending(deps.session)?{decision:"wait",ranges:[],reason:"Epoch confirmation pending"}:await planHistory(deps.config as ResolvedKernelConfig,{...deps.session,state:probe.state},messages,ranges,false,deps.signal);
 +                    if(decision.decision==="wait"||decision.decision==="uncertain")collaborativeDecisions.set(deps.session,{key,candidates:candidates.map(r=>({startRef:r.startRef,endRef:r.endRef,tokens:r.tokens})),until:Date.now()+30*60_000,decision});
 +                }
-+            }catch(error){if(!mandatory||deps.signal?.aborted)throw error;deps.log("warn","[collaborative] hard safety threshold: planner unavailable");decision={decision:"wait",ranges:[],reason:"Planner unavailable"};}
++            }catch(error){collect(String(error));if(!mandatory||deps.signal?.aborted)throw error;deps.log("warn","[collaborative] hard safety threshold: planner unavailable");decision={decision:"wait",ranges:[],reason:"Planner unavailable"};}
 +            if(decision.decision!=="legacy"&&decision.decision!=="now"&&!mandatory)return deferred();
 +            if(deps.session.state!==originalState||deps.session.revisionEpoch!==epoch||deps.session.lastMessages!==originalHistory)throw Error("Source changed during planning");
 +            transaction=compressionDraft(deps.session);const draft=transaction.draft;draft.state=probe.state;
 +            if(decision.decision==="now"){
 +                const applied=await applyConfiguredCompression({content:decision.ranges},{core:deps.core,config:deps.config,session:draft,messages,log:m=>deps.log("info",m)},undefined,deps.signal,true);
 +                if(applied.outcome!=="applied"){
++                    collect(applied.text);
 +                    if(!mandatory||deps.signal?.aborted)throw Error("Model-selected ranges failed validation");
 +                    deps.log("warn","[collaborative] hard safety threshold: rejected model ranges; using engine candidates");
 +                }else{
@@ -499,14 +519,15 @@ index 0af1155..1fe85b8 100644
 +            if(mandatory){deps.log("warn","[collaborative] hard safety threshold reached; overriding deferral or insufficient range selection");deps={...deps,compressionTarget:threshold*0.9};}
 +        }
 +        transaction??=compressionDraft(deps.session);
-+        const result=await preflightCompressInner({...deps,session:transaction.draft,externalSummary:plan},messages.map(m=>({...m})));
++        const result=await preflightCompressInner({...deps,session:transaction.draft,externalSummary:plan,onCollaborativeFailure:collect},messages.map(m=>({...m})));
 +        if(result.failure||plan?.failed||deps.signal?.aborted)throw Error("Collaborative preflight did not fully validate");
 +        result.compressedRanges+=preferredRanges;result.savedTokens+=preferredSavings;
 +        transaction.commit();collaborativeDecisions.delete(deps.session);return result;
-+    }catch{
++    }catch(error){
++        collect(String(error));
 +        collaborativeDecisions.delete(deps.session);
 +        if(!deps.signal?.aborted){deps.session.metadata.autoFoldBackoffUntil=Date.now()+10*60_000;markDirty(deps.session);}
-+        return {compressedRanges:0,savedTokens:0,payloadEstimate:estimateCoreMessages(messages),rangesRemaining:0,fitsWindow:false,hadFoldableCandidates:true,failure:{kind:"upstream",detail:"Collaborative compression aborted; originals retained; automatic retry backs off for 10 minutes unless hard safety threshold is reached."}};
++        return {compressedRanges:0,savedTokens:0,payloadEstimate:estimateCoreMessages(messages),rangesRemaining:0,fitsWindow:false,hadFoldableCandidates:true,failure:{kind:"upstream",detail:"Collaborative compression aborted; originals retained; automatic retry backs off for 10 minutes unless hard safety threshold is reached."+([...receipts].length?" "+[...receipts].join("; "):"")}};
 +    }
 +}
 +
@@ -514,7 +535,7 @@ index 0af1155..1fe85b8 100644
      // #3641: epoch confirmation pending — the fold state and the resent
      // history share nothing (wholesale replacement, no word evidence), so any
      // fold computed here would summarize a substrate whose anchor set can
-@@ -1807,7 +1880,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+@@ -1807,7 +1885,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
      // digest-fold ordinary payloads (caught by the model-switch e2e: its
      // summarization calls vanished under a 300k foreign-model baseline).
      const entryOvershoot = limit > 0 && entryLocal > 0 ? entryLocal / limit : 1;
@@ -523,7 +544,7 @@ index 0af1155..1fe85b8 100644
      const effectiveRoundCap = emergencyFold ? EMERGENCY_ROUND_CAP : roundBudget;
      if (emergencyFold) {
          deps.log("warn", `[preflight] payload ~${entryLocal} tok vs window ${limit} (~${entryOvershoot.toFixed(1)}x) exceeds the LLM fold path's coverage bound (${EMERGENCY_FOLD_COVERAGE}x) — folding with deterministic digests instead of summarization calls; originals stay restorable via decompress (#2383)`);
-@@ -1882,7 +1955,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+@@ -1882,7 +1960,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
                  const cid = m ? cover.get(m.id) : undefined;
                  if (cid) {
                      const blk = deps.session.state.blocks.find((x) => x.blockId === cid);
@@ -532,7 +553,7 @@ index 0af1155..1fe85b8 100644
                      while (i <= hi) { const mm = messages[i]; if (mm && cover.get(mm.id) === cid) i++; else break; }
                  } else {
                      if (m) parts.push(`[${m.role}] ${m.text ?? ""}`);
-@@ -2539,7 +2612,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+@@ -2539,7 +2617,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
                          const nb = deps.session.state.blocks.find((b) => b.blockId === nid);
                          if (!nb) { droppedParts.push(`child block ${nid} missing from state`); continue; }
                          const label = nb.topic ? `${nb.blockId}: ${nb.topic}` : nb.blockId;
@@ -541,7 +562,16 @@ index 0af1155..1fe85b8 100644
                      }
                      if (droppedParts.length > 0) {
                          deps.log("debug", `[preflight] range ${skipKey}: ${droppedParts.length} part(s) rendered nothing (${droppedParts.slice(0, 3).join("; ")})`);
-@@ -2589,7 +2662,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+@@ -2575,7 +2653,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+                 }
+                 if (nominations.length >= 2) {
+                     summaryCalls += reservedCalls;
+-                    const workItems = nominations.flatMap((nom) => nom.chunks.map((chunk) => ({ content: chunk, instructions: nom.instructions, minSummaryChars: MIN_SUMMARY_CHARS, maxSummaryChars: deps.config.compress.maxSummaryLength })));
++                    const workItems = nominations.flatMap((nom) => nom.chunks.map((chunk) => ({ onCollaborativeFailure:deps.onCollaborativeFailure, content: chunk, instructions: nom.instructions, minSummaryChars: MIN_SUMMARY_CHARS, maxSummaryChars: deps.config.compress.maxSummaryLength })));
+                     const batch = await batchPlan.summarize(workItems, deps.signal);
+                     const assembled = nominations.map((nom): string | undefined => {
+                         const entries = batch.results.slice(nom.offset, nom.offset + nom.chunks.length);
+@@ -2589,7 +2667,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
                          if (maxSummary <= 0 || candidate.length <= maxSummary) {
                              return shrinkOk(candidate) ? candidate : undefined;
                          }
@@ -550,7 +580,7 @@ index 0af1155..1fe85b8 100644
                              const rescued = truncateSummaryToLimit(candidate, maxSummary, activeConfig.compress.minSummaryLength);
                              if (rescued !== null && shrinkOk(rescued)) {
                                  deps.log("warn", `[preflight] range ${nom.skipKey}: assembled summary ${candidate.length} chars exceeded maxSummaryLength (${maxSummary}); truncated to ${rescued.length} chars`);
-@@ -2812,7 +2885,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+@@ -2812,7 +2890,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
                      // re-expanding it would defeat the compression this fold performs.
                      if (!nb) { droppedParts.push(`child block ${nid} missing from state`); continue; }
                      const label = nb.topic ? `${nb.blockId}: ${nb.topic}` : nb.blockId;
@@ -559,7 +589,7 @@ index 0af1155..1fe85b8 100644
                      if (emergencyFold) entries.push({ ref: nb.blockId, label: `summarized ${label}`, text: nb.summary });
                  }
                  if (droppedParts.length > 0) {
-@@ -2916,7 +2989,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
+@@ -2916,7 +2994,7 @@ export async function preflightCompress(deps: PreflightDeps, messages: CoreMessa
                                  } else {
                                      outcome = { unusable: `assembled summary (~${countText(candidate)} units) does not shrink its range (~${spanUnits} units) — suspected regurgitation` };
                                  }
@@ -638,7 +668,7 @@ index 6fc46fc..57e0c30 100644
      // replacement or compression handler (#2324).
 diff --git a/tests/collaborative-transaction.test.ts b/tests/collaborative-transaction.test.ts
 new file mode 100644
-index 0000000..9df8150
+index 0000000..8f3a38a
 --- /dev/null
 +++ b/tests/collaborative-transaction.test.ts
 @@ -0,0 +1,203 @@
@@ -765,7 +795,7 @@ index 0000000..9df8150
 + await fixture(async ctx=>{
 +  ctx.config.modelContextLimit=6000;const before=JSON.stringify(ctx.session.state);
 +  const result=await preflightCompress({core:ctx.core,config:ctx.config,session:ctx.session,prompts:defaultPrompts,protocol:'openai',model:'unused',url:'http://127.0.0.1:1',headers:{},log:()=>{}},ctx.messages);
-+  assert.ok(result.failure);assert.equal(JSON.stringify(ctx.session.state),before);assert.equal(ctx.session.blockContents.size,0);
++  assert.match(result.failure?.detail??"",/run=12345678-1234-1234-1234-123456789012 stage=fact-check/);assert.equal(JSON.stringify(ctx.session.state),before);assert.equal(ctx.session.blockContents.size,0);
 + },()=>false,()=>({decision:'wait',ranges:[],reason:'defer'}));
 +});
 +
@@ -781,7 +811,7 @@ index 0000000..9df8150
 +test('failed generation backs off automatic calls but hard pressure overrides it',async()=>{
 + let plans=0,calls=0;await fixture(async ctx=>{
 +  const deps={core:ctx.core,config:ctx.config,session:ctx.session,prompts:defaultPrompts,protocol:'openai' as const,model:'unused',url:'http://127.0.0.1:1',headers:{},log:()=>{}};
-+  const first=await preflightCompress(deps,ctx.messages);assert.ok(first.failure);const n=calls;
++  const first=await preflightCompress(deps,ctx.messages);assert.match(first.failure?.detail??"",/run=12345678-1234-1234-1234-123456789012 stage=fact-check/);const n=calls;
 +  await preflightCompress(deps,ctx.messages);assert.equal(plans,1);assert.equal(calls,n);
 +  ctx.config.modelContextLimit=6000;await preflightCompress(deps,ctx.messages);assert.equal(plans,2);assert.ok(calls>n);
 + },()=>{calls++;return false;},input=>{plans++;return {decision:'now',ranges:input.candidates,reason:'compress'};});

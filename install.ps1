@@ -23,7 +23,7 @@ function UndoInstall($journal) {
   }
   if(Test-Path -LiteralPath $entry.backup){Move-Item -LiteralPath $entry.backup -Destination $target}
  }
- foreach($entry in $journal.files){Copy-Item -LiteralPath $entry.backup -Destination $entry.path -Force}
+ foreach($entry in $journal.files){if($entry.created){if([IO.Path]::GetFullPath($entry.path) -ne [IO.Path]::GetFullPath((Join-Path $HOME '.dsh/collaborative-compaction/installed-engine.json'))){throw 'Unexpected recovery path'};if(Test-Path -LiteralPath $entry.path){Remove-Item -LiteralPath $entry.path};continue};Copy-Item -LiteralPath $entry.backup -Destination $entry.path -Force}
  Remove-Item -LiteralPath $journalPath -Force
  Write-Output 'Installation rolled back; previous packages and configuration restored.'
 }
@@ -48,7 +48,9 @@ $pluginLink='link:'+($plugin -replace '\\','/')
 $manifest.dependencies['billion-context']=$engineLink
 $manifest.dependencies['dsh-collaborative-compaction']=$pluginLink
 if($manifest.dsh.profile.bundles -notcontains 'dsh-collaborative-compaction'){$manifest.dsh.profile.bundles+=@('dsh-collaborative-compaction')}
-$changes=@{}
+$dataDir=Join-Path $HOME '.dsh/collaborative-compaction'
+$marker=Join-Path $dataDir 'installed-engine.json'
+$changes=@{$marker=(@{enginePath=$repo;profilePath=$profileDir} | ConvertTo-Json)}
 foreach($lock in @((Join-Path $profileDir 'pnpm-lock.yaml'),(Join-Path $profileDir 'node_modules/.pnpm/lock.yaml'))){
  if(Test-Path -LiteralPath $lock){
   $value=[IO.File]::ReadAllText($lock)
@@ -71,6 +73,7 @@ New-Item -ItemType Directory -Path $backup | Out-Null
 $journal=@{profile=$profileDir;files=@();links=@();state='pending'}
 $i=0
 foreach($file in @($manifestPath)+@($changes.Keys)){
+ if(!(Test-Path -LiteralPath $file)){$journal.files+=@{path=$file;created=$true};continue}
  $saved=Join-Path $backup ("file-$i.backup");Copy-Item -LiteralPath $file -Destination $saved
  $journal.files+=@{path=$file;backup=$saved};$i++
 }
@@ -90,6 +93,7 @@ try {
  }
  [IO.File]::WriteAllText($manifestPath,($manifest | ConvertTo-Json -Depth 50))
  $step++;if($FailAfterStep -eq $step){throw 'Injected configuration failure'}
+ [IO.Directory]::CreateDirectory($dataDir) | Out-Null
  foreach($file in $changes.Keys){[IO.File]::WriteAllText($file,$changes[$file])}
  $journal.state='complete';[IO.File]::WriteAllText((Join-Path $backup 'transaction.json'),($journal | ConvertTo-Json -Depth 20))
  Remove-Item -LiteralPath $journalPath -Force
