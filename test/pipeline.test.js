@@ -82,3 +82,32 @@ test('numbered lists and soft counts/acronyms do not reject ordinary summaries',
  assert.throws(()=>validateLiterals('1.5万元。',source),/Unanchored/);
  assert.throws(()=>validateLiterals('交付11月6日。',source),/Unanchored/);
 });
+
+test('path quoting and percent typography preserve values',async()=>{
+ const {validateLiterals}=await import('../runtime.js');
+ const file=String.raw`C:\tmp\clip.mp3`;
+ assert.doesNotThrow(()=>validateLiterals('文件 '+String.fromCharCode(96)+file+String.fromCharCode(96)+' 完成 20%',file+' 完成 20％'));
+ assert.throws(()=>validateLiterals(file.replace('clip','other'),file),/Unanchored/);
+ assert.throws(()=>validateLiterals('完成21%','完成20％'),/Unanchored/);
+});
+test('automatic retries skip model calls while explicit retry and changed context run',async()=>{
+ const item={...work,trigger:'auto',reference:'cooldown fixture'};
+ let count=0;
+ const options={settings:{...c,reviewEnabled:false},transport:async()=>{count++;return {stop_reason:'max_tokens',content:[{type:'text',text:'private response'}]}}};
+ const run=w=>runPipeline(w,async()=>result,options);
+ await assert.rejects(run(item),/stop=max_tokens, blocks=1, types=text/);
+ await assert.rejects(run(item),/stage=backoff/);
+ assert.equal(count,1);
+ await assert.rejects(run({...item,trigger:'manual'}),/stage=B/);
+ await assert.rejects(run({...item,reference:'changed'}),/stage=B/);
+ assert.equal(count,3);
+ assert.ok(!JSON.stringify(runs()).includes('private response'));
+});
+test('planning logs preserve disconnect, shutdown and deadline causes',async()=>{
+ const {planCompression}=await import('../runtime.js');
+ for(const message of ['Caller disconnected','Host stopping','Deadline exceeded']){
+  const ctl=new AbortController();
+  const reason=message==='Deadline exceeded'?new DOMException('expired','TimeoutError'):Error(message);
+  await assert.rejects(planCompression({messages:[]},{settings:c,signal:ctl.signal,transport:async()=>{ctl.abort(reason);throw Error('fetch failed')}}),new RegExp(message));
+ }
+});

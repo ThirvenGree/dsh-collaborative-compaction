@@ -102,19 +102,20 @@ export function apply(ctx){
  const server=http.createServer(async(req,res)=>{
   const supplied=Buffer.from(req.headers.authorization||''),expected=Buffer.from('Bearer '+token);
   if(req.method!=='POST'||!['/v1/chat/completions','/v1/plan'].includes(req.url)||supplied.length!==expected.length||!timingSafeEqual(supplied,expected)||req.headers.origin){reply(res,403,{error:'Forbidden'});return;}
-  const abort=new AbortController();pending.add(abort);res.on('close',()=>{if(!res.writableEnded)abort.abort();});
+  const abort=new AbortController();pending.add(abort);res.on('close',()=>{if(!res.writableEnded)abort.abort(Error("Caller disconnected"));});
   try{const payload=await body(req),c=config();if(!c.enabled)throw Error('Plugin disabled; reload compression configuration');if(req.url==='/v1/plan'){reply(res,200,await planCompression(payload,{settings:c,signal:abort.signal}));return;}if(payload.model!=='dsh-collaborative-v1')throw Error('Unsupported protocol model');
    const text=payload.messages?.findLast(x=>x.role==='user')?.content,instructions=payload.messages?.filter(x=>x.role==='system').map(x=>x.content).join('\n');
    const source=JSON.parse(text);if(typeof source.content!=='string'||!source.content.trim())throw Error('Missing frozen history');
    const max=payload.metadata?.dsh_compaction?.maxSummaryChars;
    if(payload.metadata?.dsh_compaction?.version!==1||!Number.isSafeInteger(max)||max<1)throw Error('Missing structured summary budget; update the billion-context adapter');
-   const work={content:source.content,reference:source.reference,instructions:instructions||'',maxSummaryChars:Math.min(max,c.maxSummaryChars)};
+   const requestedTrigger=payload.metadata.dsh_compaction.trigger;
+   const work={trigger:["manual","tool","auto"].includes(requestedTrigger)?requestedTrigger:"auto",content:source.content,reference:source.reference,instructions:instructions||'',maxSummaryChars:Math.min(max,c.maxSummaryChars)};
    const summary=await runPipeline(work,sig=>generateA(work,sig,c),{signal:abort.signal,settings:c});reply(res,200,{choices:[{message:{role:'assistant',content:summary},finish_reason:'stop'}]});
   }catch(e){reply(res,422,{error:String(e.message).slice(0,250)});}finally{pending.delete(abort);}
  });
  server.on('error',e=>{health='listener failed: '+e.code;});
  server.listen(0,'127.0.0.1',()=>{port=server.address().port;try{syncEngine(config(),port,token);health='ready';write(path.join(dataRoot,'host.json'),{port,pid:process.pid,at:Date.now()});}catch(e){health='engine config failed: '+e.message;}});
- ctx.effect(()=>()=>{for(const c of pending)c.abort();server.close();try{syncEngine({...config(),enabled:false},port,token);}catch{}});
+ ctx.effect(()=>()=>{for(const c of pending)c.abort(Error("Host stopping"));server.close();try{syncEngine({...config(),enabled:false},port,token);}catch{}});
  ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/state',handler:async(req,res)=>{
   const host=req.headers.host||'',origin=req.headers.origin;
   if(!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)||Number(host.slice(host.lastIndexOf(':')+1))!==req.socket.localPort||req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==`http://${host}`)){reply(res,403,{error:'Forbidden'});return;}

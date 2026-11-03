@@ -17,7 +17,7 @@ index acbbd53..bfc5f63 100644
 +
 +- `src/collaborative-planner.ts`: authenticated local model planning; validates suggested ranges before engine preview.
 diff --git a/src/agent/dsh-native.ts b/src/agent/dsh-native.ts
-index 779ec5f..81bc458 100644
+index 779ec5f..28d18d8 100644
 --- a/src/agent/dsh-native.ts
 +++ b/src/agent/dsh-native.ts
 @@ -57,7 +57,7 @@ import { ensureProxyRunning, LAUNCHER_DEFAULT_HOST, requestInstanceShutdown } fr
@@ -49,7 +49,7 @@ index 779ec5f..81bc458 100644
 +                const ranges = candidates.filter((item: { tokens?: unknown }) => typeof item.tokens === "number" && item.tokens > 0)
 +                    .map((item: { startRef?: unknown; endRef?: unknown }) => ({ startId: item.startRef, endId: item.endRef }));
 +                if (ranges.length === 0) return { kind: "success", text: "No eligible history outside the protected recent region; nothing changed." };
-+                const result = await forwardTool(base, sid, "compress", { content: ranges }, invocation?.signal, true);
++                const result = await forwardTool(base, sid, "compress", { content: ranges, collaborativeManualRetry: true }, invocation?.signal, true);
 +                return { kind: result.failed ? "error" : "success", text: result.text };
 +            } catch {
 +                return { kind: "error", text: "Collaborative compression failed; originals retained. Check stage diagnostics in settings." };
@@ -188,7 +188,7 @@ index 0000000..8c85ef1
 +
 +export function collaborativePlanningEnabled(config: unknown): boolean { return collaborativeEnabled(config) && (config as ResolvedKernelConfig).externalSummary?.modelPlanning !== false; }
 diff --git a/src/external-summary-compress.ts b/src/external-summary-compress.ts
-index 24c0d21..125cfc1 100644
+index 24c0d21..cf7ee2e 100644
 --- a/src/external-summary-compress.ts
 +++ b/src/external-summary-compress.ts
 @@ -1,3 +1,4 @@
@@ -227,7 +227,7 @@ index 24c0d21..125cfc1 100644
 +            if (decision.decision === "now") selected = {content: decision.ranges};
 +        }
 +        stage = "generation";
-+        const result = await applyConfiguredCompressionInner(selected, { ...ctx, session: transaction.draft }, callId, signal);
++        const result = await applyConfiguredCompressionInner(selected, { ...ctx, session: transaction.draft }, callId, signal, planned ? "auto" : (input as {collaborativeManualRetry?: boolean})?.collaborativeManualRetry === true ? "manual" : "tool");
 +        if (result.outcome !== "applied" || signal?.aborted) {
 +            const detail = result.outcome === "refused" ? result.text : "Cancelled or incomplete batch";
 +            return compressResult(`[Compression FAILED: request=${requestId} stage=${stage}] ${detail} Originals retained.`, "refused", 0);
@@ -241,7 +241,7 @@ index 24c0d21..125cfc1 100644
 +    }
 +}
 +
-+async function applyConfiguredCompressionInner(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal): Promise<ProxyToolResult> {
++async function applyConfiguredCompressionInner(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal, trigger: SummaryWork["trigger"] = "tool"): Promise<ProxyToolResult> {
      if (signal?.aborted) return compressResult("[Compression FAILED: cancelled. Nothing compressed.]", "refused", 0);
      // The plan rides the request Config rail (#833: ctx.config is the
      // session's effective Config — same cascade that produced the wire).
@@ -275,7 +275,7 @@ index 24c0d21..125cfc1 100644
          // without it the compress path asked for output it could never accept.
          const maxSummaryChars = Math.min(range.summaryMaxChars ?? Infinity, ctx.config.compress.maxSummaryLength);
 -        work.push({ content, reference, minSummaryChars: ctx.config.compress.minSummaryLength, maxSummaryChars,
-+        work.push({ content, reference, onCollaborativeFailure: receipt => failures.push(range.startRef+"-"+range.endRef+" "+receipt), minSummaryChars: ctx.config.compress.minSummaryLength, maxSummaryChars,
++        work.push({ trigger, content, reference, onCollaborativeFailure: receipt => failures.push(range.startRef+"-"+range.endRef+" "+receipt), minSummaryChars: ctx.config.compress.minSummaryLength, maxSummaryChars,
              instructions: `${ctx.session.meta.summaryInstructions ?? buildCompressSystemPrompt()}\nWrite a faithful summary of the selected range ${range.startRef}-${range.endRef}. Preserve task status, constraints, decisions, exact code identifiers, paths and errors, and unfinished objectives with their source message refs. Submitted summary hints are non-authoritative. Never summarize or change the read-only reference.`
                  + summaryLengthBudgetClause(maxSummaryChars, ctx.config.compress.minSummaryLength) });
      }
@@ -286,14 +286,14 @@ index 24c0d21..125cfc1 100644
      const successful: ParsedRange[] = [];
      for (const [index, result] of batch.results.entries()) {
 diff --git a/src/external-summary-http.ts b/src/external-summary-http.ts
-index dd6f743..39a861d 100644
+index dd6f743..7796aa1 100644
 --- a/src/external-summary-http.ts
 +++ b/src/external-summary-http.ts
 @@ -228,6 +228,7 @@ export function createSummaryHttpCandidate(target: SummaryHttpTarget, maxRespons
              // never payload bytes (defaultCountTokens is a cheap char scan).
              const inputTokens = defaultCountTokens(system) + defaultCountTokens(content);
              const payload = summaryPayload(plan.protocol, plan.model, system, content, plan.stream ?? false, true, url.hostname, plan.contextWindow);
-+            if(plan.model === "dsh-collaborative-v1") payload.metadata={dsh_compaction:{version:1,maxSummaryChars:work.maxSummaryChars}};
++            if(plan.model === "dsh-collaborative-v1") payload.metadata={dsh_compaction:{version:1,trigger:work.trigger ?? "auto",maxSummaryChars:work.maxSummaryChars}};
              if (plan.outputTokens !== undefined) {
                  if (plan.contextWindow !== undefined && defaultCountTokens(system) + defaultCountTokens(content) + 256 + plan.outputTokens > plan.contextWindow) throw new Error("External summary input exceeds the target context budget");
                  if (plan.protocol === "google") {
@@ -302,7 +302,7 @@ index dd6f743..39a861d 100644
                      if (!dispatched.response.ok) {
                          const snippet = await readErrorSnippet(dispatched.response);
 +                        if (plan.model === "dsh-collaborative-v1") {
-+                            const receipt = snippet.match(/run=[0-9a-f-]{36} stage=(?:A|B|review|fact-check|pipeline)\b/)?.[0];
++                            const receipt = snippet.match(/run=[0-9a-f-]{36} stage=(?:A|B|review|fact-check|pipeline|backoff)\b/)?.[0];
 +                            if (receipt) work.onCollaborativeFailure?.(receipt);
 +                        }
                          // Mask only for the log line: the verdict below needs the raw body markers.
@@ -401,11 +401,12 @@ index 4e02788..d423960 100644
          if (!seenExpansionWarnings.has(message)) {
              seenExpansionWarnings.add(message);
 diff --git a/src/external-summary.ts b/src/external-summary.ts
-index 622eceb..9c76909 100644
+index 622eceb..567b84e 100644
 --- a/src/external-summary.ts
 +++ b/src/external-summary.ts
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
  export interface SummaryWork {
++    readonly trigger?: "manual" | "tool" | "auto";
 +    onCollaborativeFailure?: (receipt: string) => void;
      readonly content: string;
      readonly instructions: string;
@@ -845,7 +846,7 @@ index 0000000..9df8150
 +    });
 +});
 diff --git a/tests/dsh-native.test.ts b/tests/dsh-native.test.ts
-index d1c76b4..3d8150b 100644
+index d1c76b4..d7aa6ce 100644
 --- a/tests/dsh-native.test.ts
 +++ b/tests/dsh-native.test.ts
 @@ -716,7 +716,7 @@ test("apply() attach mode: registers manifest tools verbatim, gates headers, for
@@ -882,7 +883,7 @@ index d1c76b4..3d8150b 100644
 +  const result=await cmd.handler({agent:{session:{id:'isolated-manual'}}});
 +  assert.equal(result.kind,'success',result.text);
 +  assert.equal(calls.length,1);assert.equal(calls[0].conversationId,'isolated-manual');
-+  assert.equal(calls[0].tool,'compress');assert.deepEqual(calls[0].args,{content:[{startId:'m00001',endId:'m00009'}]});
++  assert.equal(calls[0].tool,'compress');assert.deepEqual(calls[0].args,{content:[{startId:'m00001',endId:'m00009'}],collaborativeManualRetry:true});
 + });}finally{proxy.close();_resetRegisterForTest(undefined);rmrf(home);}
 +});
 diff --git a/tsup.config.ts b/tsup.config.ts
