@@ -361,28 +361,34 @@ function Panel(){
  const [state,setState]=R.useState(null),[draft,setDraft]=R.useState(null),[loadError,setLoadError]=R.useState('');
  const [tab,setTab]=R.useState('settings'),[saving,setSaving]=R.useState(false),[flash,setFlash]=R.useState(null);
  const baseRef=R.useRef(null),draftRef=R.useRef(null);draftRef.current=draft;
+ const sequence=R.useRef(0),pendingSave=R.useRef(false);
  async function refresh(){
+  if(pendingSave.current)return;
+  const version=++sequence.current;
   try{
    const r=await fetch(API,{cache:'no-store'});const s=await r.json();if(!r.ok)throw Error(s.error||'HTTP '+r.status);
+   if(version!==sequence.current)return;
    const next=toDraft(s.config),cur=draftRef.current,prev=baseRef.current;
    setState(s);setLoadError('');
-   if(!cur||(prev&&changedKeys(cur,prev).length===0))setDraft(next);
+   const edited=cur&&prev?changedKeys(cur,prev):[];
+   setDraft({...next,...Object.fromEntries(edited.map(k=>[k,cur[k]]))});
+   for(const k of edited)next[k]=prev[k];
    baseRef.current=next;
-  }catch(e){setLoadError(e.message||'读取失败');}
+  }catch(e){if(version===sequence.current)setLoadError(e.message||'读取失败');}
  }
  R.useEffect(()=>{refresh();const t=setInterval(refresh,5000);return()=>clearInterval(t);},[]);
  R.useEffect(()=>{if(flash?.tone!=='ok')return;const t=setTimeout(()=>setFlash(null),6000);return()=>clearTimeout(t);},[flash]);
  const set=(k,v)=>{setFlash(null);setDraft(d=>({...d,[k]:v}));};
  const base=baseRef.current,changes=changedKeys(draft,base),errors=draft?Object.keys(draft).filter(k=>check(k,draft[k])):[];
  async function save(){
-  if(!state||errors.length)return;setSaving(true);setFlash(null);
+  if(!state||errors.length||pendingSave.current)return;pendingSave.current=true;sequence.current++;setSaving(true);setFlash(null);
   try{
-   const r=await fetch(API,{method:'POST',headers:{'content-type':'application/json','x-dsh-compaction-csrf':state.csrf},body:JSON.stringify(fromDraft(draft))});
+   const r=await fetch(API,{method:'POST',headers:{'content-type':'application/json','x-dsh-compaction-csrf':state.csrf},body:JSON.stringify({changes:Object.fromEntries(changes.map(k=>[k,fromDraft(draft)[k]])),expected:Object.fromEntries(changes.map(k=>[k,fromDraft(base)[k]]))})});
    const s=await r.json();if(!r.ok)throw Error(s.error||'HTTP '+r.status);
-   const next=toDraft(s.config);baseRef.current=next;setState(s);setDraft(next);
+   const next=toDraft(s.config);baseRef.current=next;setState(s);setDraft(current=>({...next,...Object.fromEntries(changedKeys(current,draft).map(k=>[k,current[k]]))}));
    setFlash({tone:'ok',text:'已保存。之后的压缩使用新设置，正在进行的压缩不受影响。'});
   }catch(e){setFlash({tone:'bad',text:'没有保存：'+(e.message||'请求失败')});}
-  finally{setSaving(false);}
+  finally{pendingSave.current=false;setSaving(false);}
  }
  const [tone,healthText]=healthOf(state,loadError);
  const runs=state?.runs||[];

@@ -90,18 +90,28 @@ test('path quoting and percent typography preserve values',async()=>{
  assert.throws(()=>validateLiterals(file.replace('clip','other'),file),/Unanchored/);
  assert.throws(()=>validateLiterals('完成21%','完成20％'),/Unanchored/);
 });
-test('automatic retries skip model calls while explicit retry and changed context run',async()=>{
+test('hard pressure skips deterministic cooldown, never in-flight dedup; transient 429 never arms cooldown',async()=>{
  const item={...work,trigger:'auto',reference:'cooldown fixture'};
- let count=0;
- const options={settings:{...c,reviewEnabled:false},transport:async()=>{count++;return {stop_reason:'max_tokens',content:[{type:'text',text:'private response'}]}}};
- const run=w=>runPipeline(w,async()=>result,options);
- await assert.rejects(run(item),/stop=max_tokens, blocks=1, types=text/);
- await assert.rejects(run(item),/stage=backoff/);
- assert.equal(count,1);
- await assert.rejects(run({...item,trigger:'manual'}),/stage=B/);
- await assert.rejects(run({...item,reference:'changed'}),/stage=B/);
- assert.equal(count,3);
- assert.ok(!JSON.stringify(runs()).includes('private response'));
+ let count=0,mode='reject',release;
+ const gate=new Promise(resolve=>{release=resolve;});
+ const settings={...c,claudeEnabled:false,factCheckEnabled:true};
+ const run=(w)=>runPipeline(w,async()=>result,{settings,transport:async(base,route,headers,body)=>{
+  if(body.text?.format)return structured({approved:mode!=='reject',missingCritical:[],unsupported:[],facts:[{summaryQuote:'1200',sourceQuote:'1200'}]})();
+  count++;
+  if(mode==='429')throw Error('Provider HTTP 429');
+  if(mode==='hold')await gate;
+  return transport([])(base,route,headers,body);
+ }});
+ await assert.rejects(run(item),/stage=fact-check/);
+ await assert.rejects(run({...item,reference:'changed'}),/stage=backoff/);
+ mode='hold';const pending=run({...item,pressure:'hard'});
+ await assert.rejects(run({...item,pressure:'hard'}),/already running/);
+ release();await pending;
+ mode='429';await assert.rejects(run(item),/stage=review Provider HTTP 429/);
+ mode='good';await run({...item,pressure:'hard'});
+ mode='429';await assert.rejects(run(item),/stage=review Provider HTTP 429/);
+ mode='good';await run(item);
+ assert.equal(count,6);
 });
 test('planning logs preserve disconnect, shutdown and deadline causes',async()=>{
  const {planCompression}=await import('../runtime.js');
@@ -110,4 +120,14 @@ test('planning logs preserve disconnect, shutdown and deadline causes',async()=>
   const reason=message==='Deadline exceeded'?new DOMException('expired','TimeoutError'):Error(message);
   await assert.rejects(planCompression({messages:[]},{settings:c,signal:ctl.signal,transport:async()=>{ctl.abort(reason);throw Error('fetch failed')}}),new RegExp(message));
  }
+});
+
+test('provider transport rejects redirects, oversize bodies and preserves safe credit diagnosis',async()=>{
+ const original=globalThis.fetch;
+ const run=()=>runPipeline({...work,trigger:'auto',content:'fixture provider network'},async()=>result,{settings:{...c,reviewEnabled:false,retries:0}});
+ try{
+  globalThis.fetch=async(url,opts)=>{assert.equal(opts.redirect,'error');return new Response(JSON.stringify({error:{message:'Your credit balance is too low'}}),{status:400});};
+  await assert.rejects(run(),/stage=B Provider HTTP 400 .*credits insufficient/);
+  globalThis.fetch=async()=>new Response(new Uint8Array(4000001));await assert.rejects(run(),/Provider response too large/);
+ }finally{globalThis.fetch=original;}
 });

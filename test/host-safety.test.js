@@ -34,7 +34,7 @@ test('all four settings commit steps roll back to their exact previous bytes',as
  const snapshot=()=>new Map(fs.readdirSync(dir).map(name=>[name,fs.readFileSync(path.join(dir,name),'hex')]));
  const original=snapshot();
  try{
-  for(let failAt=1;failAt<=4;failAt++){
+  for(let failAt=1;failAt<=5;failAt++){
    const rename=fs.renameSync;let n=0;
    try {
     fs.renameSync=(...args)=>{if(++n===failAt)throw Error('injected rename failure');return rename(...args);};
@@ -65,4 +65,33 @@ test('custom install loads ESM validator with top-level await',async()=>{
  const profile=process.env.DSH_PROFILE_DIR;delete process.env.DSH_PROFILE_DIR;process.env.BILI_CONFIG_FILE=path.join(dir,'custom.json');
  try{await assert.rejects(sync({enabled:true},1,'fake'),/custom schema invoked/);}
  finally{delete process.env.BILI_CONFIG_FILE;if(profile!==undefined)process.env.DSH_PROFILE_DIR=profile;}
+});
+
+test('external edits during validation survive, and pre-existing credentials are restored',async()=>{
+ const dir=process.env.DSH_COLLAB_TEST_HOME,file=path.join(dir,'concurrent.json'),credential=file+'.summary-credentials.json';
+ process.env.BILI_CONFIG_FILE=file;fs.writeFileSync(file,'{}');fs.writeFileSync(credential,JSON.stringify({'dsh-collaborative':'before'}));
+ try{
+  await assert.rejects(sync({enabled:true},1,'fake',async()=>fs.writeFileSync(file,'{"external":true}')),/changed during validation/);
+  assert.equal(JSON.parse(fs.readFileSync(file)).external,true);
+  await syncEngine({enabled:true},1,'fake');await syncEngine({enabled:false},1,'fake');
+  assert.equal(JSON.parse(fs.readFileSync(credential))['dsh-collaborative'],'before');
+ }finally{delete process.env.BILI_CONFIG_FILE;}
+});
+
+test('next process recovers a settings transaction interrupted after the engine rename',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'collab-crash-'));
+ const file=path.join(dir,'engine.json'), original='{ "compress": {} }';
+ fs.writeFileSync(file,original);
+ const env={...process.env,DSH_COLLAB_TEST_HOME:dir,BILI_CONFIG_FILE:file};
+ const hostURL=JSON.stringify(new URL('../host.js',import.meta.url).href);
+ const child=code=>spawnSync(process.execPath,['--input-type=module','-e',code],{env,encoding:'utf8'});
+ const stopped=child(`import fs from 'node:fs';import {saveSettings} from ${hostURL};
+ const rename=fs.renameSync.bind(fs);fs.renameSync=(a,b)=>{rename(a,b);if(b===process.env.BILI_CONFIG_FILE)process.exit(73);};
+ await saveSettings({enabled:true},1234,'fixture',()=>{});`);
+ assert.equal(stopped.status,73,stopped.stderr);
+ assert.ok(fs.existsSync(file+'.collab-transaction.json'));
+ const recovered=child(`import {syncEngine} from ${hostURL};await syncEngine({enabled:false},1234,'fixture',()=>{});`);
+ assert.equal(recovered.status,0,recovered.stderr);assert.equal(fs.readFileSync(file,'utf8'),original);
+ assert.deepEqual(fs.readdirSync(dir),['engine.json']);
 });

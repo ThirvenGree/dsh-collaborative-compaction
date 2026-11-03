@@ -1,19 +1,20 @@
 import {pathToFileURL} from 'node:url';
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {randomUUID,timingSafeEqual,randomBytes,createHash} from 'node:crypto';
-import {config,validateConfig,dataRoot,runs,runPipeline,planCompression} from './runtime.js';
+import {config,validateConfig,dataRoot,activeProfile,recoverRuns,runs,runPipeline,planCompression} from './runtime.js';
 export const name='collaborative-compaction';
 export const inject=['webServer','llm'];
 const route='/dsh-collaborative-compaction';
 export function engineConfigFile(){return process.env.BILI_CONFIG_FILE?path.resolve(process.env.BILI_CONFIG_FILE):path.join(process.env.XDG_CONFIG_HOME?path.resolve(process.env.XDG_CONFIG_HOME):path.join(os.homedir(),'.config'),'billion-context','billion-context.json');}
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
-function write(p,v){fs.mkdirSync(path.dirname(p),{recursive:true});const t=p+'.'+randomUUID()+'.tmp';fs.writeFileSync(t,JSON.stringify(v,null,2),{mode:0o600});fs.renameSync(t,p);}
+function write(p,v){fs.mkdirSync(path.dirname(p),{recursive:true});const t=p+'.'+randomUUID()+'.tmp';try{fs.writeFileSync(t,JSON.stringify(v,null,2),{mode:0o600});fs.renameSync(t,p);}finally{fs.rmSync(t,{force:true});}}
 async function validateEngine(engine) {
  const relative=path.join('dist','external-summary-settings.js');
- const profile=process.env.DSH_PROFILE_DIR || process.argv.find(arg=>path.isAbsolute(arg)&&fs.existsSync(path.join(arg,'node_modules','billion-context',relative)));
+ const profile=activeProfile || process.env.DSH_PROFILE_DIR || process.argv.find(arg=>path.isAbsolute(arg)&&fs.existsSync(path.join(arg,'node_modules','billion-context',relative)));
  const marker=path.join(dataRoot,'installed-engine.json');
  const root=profile?path.join(profile,'node_modules','billion-context'):fs.existsSync(marker)?read(marker).enginePath:path.join(process.env.DSH_HOME||path.join(os.homedir(),'.dsh'),'profiles','desktop','node_modules','billion-context');
  if(typeof root!=='string'||!path.isAbsolute(root))throw Error('Invalid installed engine path; rerun install.ps1');
@@ -21,56 +22,100 @@ async function validateEngine(engine) {
  const chain = schema.parseExternalSummaryChain(engine.compress.externalSummary);
  schema.parseExternalSummarySettings(schema.expandExternalSummaryChain(chain,engine.providers));
 }
-function commitFiles(changes) {
- const prepared = [], committed = [];
- try {
-  for (const [file,value] of changes) {
-   const temp=file+'.'+randomUUID()+'.tmp';
-   const previous=fs.existsSync(file)?fs.readFileSync(file):null;
-   prepared.push({file,temp,previous});
+function fileBytes(file){return fs.existsSync(file)?fs.readFileSync(file):null;}
+function digest(bytes){return bytes===null?null:createHash('sha256').update(bytes).digest('hex');}
+function journalFile(){return engineConfigFile()+'.collab-transaction.json';}
+function restoreTransaction(){
+ const journal=journalFile();
+ if(!fs.existsSync(journal))return;
+ const entries=read(journal);
+ const engine=engineConfigFile();
+ const allowed=new Set([engine,engine+'.summary-credentials.json',path.join(dataRoot,'config.json'),
+  path.join(dataRoot,'engine-before-'+createHash('sha256').update(engine).digest('hex').slice(0,16)+'.json')]);
+ if(!Array.isArray(entries)||entries.length>allowed.size)throw Error('Invalid transaction journal');
+ for(const entry of entries){
+  if(!allowed.delete(entry.file)||typeof entry.temp!=='string'||!entry.temp.startsWith(entry.file+'.')||
+     !/^[0-9a-f-]{36}\.tmp$/.test(entry.temp.slice(entry.file.length+1))||
+     digest(entry.previous===null?null:Buffer.from(entry.previous,'base64'))!==entry.before)
+   throw Error('Invalid transaction recovery target or backup');
+ }
+
+ // Preserve any subsequent edits made by an independent configuration writer.
+ for(const entry of entries){
+  const current=digest(fileBytes(entry.file));
+  if(current!==entry.before && current!==entry.after)throw Error('Configuration recovery conflict: '+path.basename(entry.file));
+ }
+ for(const entry of entries.slice().reverse()){
+  if(digest(fileBytes(entry.file))!==entry.before){
+   if(entry.previous===null)fs.rmSync(entry.file,{force:true});
+   else {fs.writeFileSync(entry.temp,Buffer.from(entry.previous,'base64'),{mode:0o600});fs.renameSync(entry.temp,entry.file);}
+  }
+  fs.rmSync(entry.temp,{force:true});
+ }
+ fs.unlinkSync(journal);
+}
+function commitFiles(changes){
+ if(!changes.size)return;
+ const entries=[];
+ try{
+  for(const [file,value] of changes){
    fs.mkdirSync(path.dirname(file),{recursive:true});
-   fs.writeFileSync(temp,JSON.stringify(value,null,2),{flag:'wx',mode:0o600});
+   const previous=fileBytes(file),next=Buffer.from(JSON.stringify(value,null,2)),temp=file+'.'+randomUUID()+'.tmp';
+   entries.push({file,temp,previous:previous?.toString('base64')??null,before:digest(previous),after:digest(next)});
+   fs.writeFileSync(temp,next,{flag:'wx',mode:0o600});
   }
-  for (const item of prepared) {
-   fs.renameSync(item.temp,item.file);
-   committed.push(item);
-  }
- } catch(error) {
-  const failures=[];
-  for (const item of committed.reverse()) {
-   try {
-    if(item.previous===null) fs.unlinkSync(item.file);
-    else {
-     fs.writeFileSync(item.temp,item.previous,{mode:0o600});
-     fs.renameSync(item.temp,item.file);
-    }
-   } catch(rollbackError) { failures.push(rollbackError); }
-  }
-  if(failures.length) throw new AggregateError([error,...failures],"Configuration rollback failed: "+failures.map(e=>e.code).join(", "));
+  write(journalFile(),entries);
+  for(const entry of entries)fs.renameSync(entry.temp,entry.file);
+  fs.unlinkSync(journalFile());
+ }catch(error){
+  restoreTransaction();
   throw error;
- } finally {
-  for(const item of prepared) fs.rmSync(item.temp,{force:true});
+ }finally{
+  if(!fs.existsSync(journalFile()))for(const entry of entries)fs.rmSync(entry.temp,{force:true});
  }
 }
-async function engineChanges(c,port,token,validate) {
+async function guarded(action){
+ const filename=engineConfigFile();
+ const key=digest(Buffer.from(process.platform==='win32'?filename.toLowerCase():filename)).slice(0,24);
+ const address=process.platform==='win32'?'\\\\.\\pipe\\dsh-config-'+key:path.join(os.tmpdir(),'dsh-config-'+key+'.sock');
+ const lock=net.createServer(socket=>socket.destroy());
+ await new Promise((resolve,reject)=>{lock.once('error',reject);lock.listen(address,resolve);});
+ try {
+  restoreTransaction();
+  const files=[filename,filename+'.summary-credentials.json',path.join(dataRoot,'config.json')];
+  const initial=files.map(file=>digest(fileBytes(file)));
+  const [changes,result]=await action();
+  if(files.some((file,i)=>digest(fileBytes(file))!==initial[i]))throw Error('Configuration changed during validation; reload and retry');
+  commitFiles(changes);
+  return result;
+ }finally{await new Promise(resolve=>lock.close(resolve));}
+}
+async function engineChanges(c,port,token,validate,shutdown=false) {
  const changes=new Map();
  const biliFile=engineConfigFile(),old=fs.existsSync(biliFile)?read(biliFile):{};
  const backup=path.join(dataRoot,'engine-before-'+createHash('sha256').update(biliFile).digest('hex').slice(0,16)+'.json');
  const owned=old.compress?.externalSummary?.targets?.some(t=>typeof t==='string'&&t.endsWith('/dsh-collaborative-v1'))===true;
  if(!c.enabled&&!owned)return changes;
+ const credentials=biliFile+'.summary-credentials.json',keys=fs.existsSync(credentials)?read(credentials):{};
+ const providerName='dsh-collaborative';
+ if(owned&&keys[providerName]!==token)throw Error('Engine configuration belongs to a different plugin instance');
+ if(shutdown&&owned&&old.providers?.[providerName]?.baseUrl!==`http://127.0.0.1:${port}/v1`)return changes;
  let saved;
  if(c.enabled&&!owned){
-  saved=structuredClone({compress:old.compress||{},provider:old.providers?.['dsh-collaborative']||null});
+  saved=structuredClone({compress:old.compress||{},provider:old.providers?.['dsh-collaborative']||null,credential:keys[providerName]??null});
   changes.set(backup,saved);
  }else saved=read(backup);
  old.compress||={};old.providers||={};
  if(c.enabled){
-  const credentials=biliFile+'.summary-credentials.json',keys=fs.existsSync(credentials)?read(credentials):{};
   keys['dsh-collaborative']=token;changes.set(credentials,keys);
   old.providers['dsh-collaborative']={baseUrl:`http://127.0.0.1:${port}/v1`,api:'openai',credentialRef:'dsh-collaborative',models:{'dsh-collaborative-v1':{contextWindow:1000000,outputTokens:c.outputTokens,stream:false}}};
   Object.assign(old.compress,{externalSummary:{enabled:true,targets:['dsh-collaborative/dsh-collaborative-v1'],budget:{totalTimeoutMs:c.timeoutMs+20000,targetTimeoutMs:c.timeoutMs+10000,maxSummaryBytes:c.maxSummaryChars*4+4096},concurrency:1,modelPlanning:c.plannerEnabled,autoFold:true,autoFoldTargetTokens:c.autoFoldTargetTokens},preserveRecentTokens:c.preserveRecentTokens,maxSummaryLength:c.maxSummaryChars});
   await validate(old);
  }else{
+  if('credential' in saved||!saved.provider){
+   if(saved.credential==null)delete keys[providerName];else keys[providerName]=saved.credential;
+   changes.set(credentials,keys);
+  }
   for(const k of ['externalSummary','preserveRecentTokens','maxSummaryLength'])if(k in saved.compress)old.compress[k]=saved.compress[k];else delete old.compress[k];
   if(saved.provider)old.providers['dsh-collaborative']=saved.provider;else delete old.providers['dsh-collaborative'];
  }
@@ -79,22 +124,24 @@ async function engineChanges(c,port,token,validate) {
 }
 let configQueue=Promise.resolve();
 function serialized(fn){const result=configQueue.then(fn);configQueue=result.catch(()=>{});return result;}
-export function syncEngine(c,port,token,validate=validateEngine){
- return serialized(async()=>commitFiles(await engineChanges(validateConfig(c),port,token,validate)));
+export function syncEngine(c,port,token,validate=validateEngine,shutdown=false){
+ return serialized(()=>guarded(async()=>[await engineChanges(validateConfig(typeof c==="function"?c():c),port,token,validate,shutdown)]));
 }
-export function saveSettings(value,port,token,validate=validateEngine){
- return serialized(async()=>{
- const next=validateConfig({...config(),...value});
+export function saveSettings(value,port,token,validate=validateEngine,expected={}){
+ return serialized(()=>guarded(async()=>{
+ const current=config();
+ for(const [k,v] of Object.entries(expected))if(current[k]!==v)throw Error("Setting changed in another window: "+k);
+ const next=validateConfig({...current,...value});
  const changes=await engineChanges(next,port,token,validate);
  changes.set(path.join(dataRoot,'config.json'),next);
- commitFiles(changes);
- return next;});
+ return [changes,next];}));
 }
 export async function body(req,limit=9_000_000){const chunks=[];let n=0;for await(const part of req){const p=Buffer.isBuffer(part)?part:Buffer.from(part);n+=p.length;if(n>limit)throw Error('Request too large');chunks.push(p);}return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,n)));}
 
 function reply(res,status,data){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data));}
 export function apply(ctx){
  fs.mkdirSync(dataRoot,{recursive:true});let token;const tokenFile=path.join(dataRoot,'local-token');if(fs.existsSync(tokenFile))token=fs.readFileSync(tokenFile,'utf8');else{token=randomBytes(32).toString('hex');fs.writeFileSync(tokenFile,token,{mode:0o600});}
+ recoverRuns();
  const csrf=randomBytes(32).toString('hex');let port=0,health='starting';const pending=new Set();
  async function generateA(work,signal,c){
   let output='',finish=false,usage=null;
@@ -105,6 +152,7 @@ export function apply(ctx){
   }
   if(!finish)throw Error('Module A stream incomplete');return {text:output,usage};
  }
+ function ready(){health='ready';write(path.join(dataRoot,'host.json'),{port,pid:process.pid,at:Date.now(),protocol:2,version:read(new URL('./package.json',import.meta.url)).version});}
  const server=http.createServer(async(req,res)=>{
   const supplied=Buffer.from(req.headers.authorization||''),expected=Buffer.from('Bearer '+token);
   if(req.method!=='POST'||!['/v1/chat/completions','/v1/plan'].includes(req.url)||supplied.length!==expected.length||!timingSafeEqual(supplied,expected)||req.headers.origin){reply(res,403,{error:'Forbidden'});return;}
@@ -114,18 +162,20 @@ export function apply(ctx){
    const source=JSON.parse(text);if(typeof source.content!=='string'||!source.content.trim())throw Error('Missing frozen history');
    const max=payload.metadata?.dsh_compaction?.maxSummaryChars;
    if(payload.metadata?.dsh_compaction?.version!==1||!Number.isSafeInteger(max)||max<1)throw Error('Missing structured summary budget; update the billion-context adapter');
+   const min=payload.metadata.dsh_compaction.minSummaryChars??1;
+   if(!Number.isSafeInteger(min)||min<1||min>Math.min(max,c.maxSummaryChars))throw Error('Incompatible summary length budget');
    const requestedTrigger=payload.metadata.dsh_compaction.trigger;
-   const work={trigger:["manual","tool","auto"].includes(requestedTrigger)?requestedTrigger:"auto",content:source.content,reference:source.reference,instructions:instructions||'',maxSummaryChars:Math.min(max,c.maxSummaryChars)};
+   const work={minSummaryChars:min,pressure:requestedTrigger==='auto'&&payload.metadata.dsh_compaction.pressure==='hard'?'hard':undefined,trigger:["manual","tool","auto"].includes(requestedTrigger)?requestedTrigger:"auto",content:source.content,reference:source.reference,instructions:instructions||'',maxSummaryChars:Math.min(max,c.maxSummaryChars)};
    const summary=await runPipeline(work,sig=>generateA(work,sig,c),{signal:abort.signal,settings:c});reply(res,200,{choices:[{message:{role:'assistant',content:summary},finish_reason:'stop'}]});
   }catch(e){reply(res,422,{error:String(e.message).slice(0,250)});}finally{pending.delete(abort);}
  });
  server.on('error',e=>{health='listener failed: '+e.code;});
- server.listen(0,'127.0.0.1',async()=>{port=server.address().port;try{await syncEngine(config(),port,token);health='ready';write(path.join(dataRoot,'host.json'),{port,pid:process.pid,at:Date.now()});}catch(e){health='engine config failed: '+e.message;}});
- ctx.effect(()=>async()=>{for(const c of pending)c.abort(Error("Host stopping"));server.close();try{await syncEngine({...config(),enabled:false},port,token);}catch{}});
+ server.listen(0,'127.0.0.1',async()=>{port=server.address().port;try{await syncEngine(config,port,token);ready();}catch(e){health='engine config failed: '+e.message;}});
+ ctx.effect(()=>async()=>{for(const c of pending)c.abort(Error("Host stopping"));server.close();try{await syncEngine(()=>({...config(),enabled:false}),port,token,validateEngine,true);}catch{}});
  ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/state',handler:async(req,res)=>{
   const host=req.headers.host||'',origin=req.headers.origin;
   if(!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)||Number(host.slice(host.lastIndexOf(':')+1))!==req.socket.localPort||req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==`http://${host}`)){reply(res,403,{error:'Forbidden'});return;}
-  try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}await saveSettings(await body(req),port,token);}else if(req.method!=='GET'){reply(res,405,{});return;}
+  try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}const input=await body(req);if(!port)throw Error("Listener not ready");await saveSettings(input.changes??input,port,token,validateEngine,input.expected);ready();}else if(req.method!=='GET'){reply(res,405,{});return;}
    reply(res,200,{config:config(),csrf,health,runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
   }catch(e){reply(res,400,{error:e.message});}
  }}));

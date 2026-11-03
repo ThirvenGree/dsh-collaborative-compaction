@@ -50,7 +50,13 @@ $manifest.dependencies['dsh-collaborative-compaction']=$pluginLink
 if($manifest.dsh.profile.bundles -notcontains 'dsh-collaborative-compaction'){$manifest.dsh.profile.bundles+=@('dsh-collaborative-compaction')}
 $dataDir=Join-Path $HOME '.dsh/collaborative-compaction'
 $marker=Join-Path $dataDir 'installed-engine.json'
-$changes=@{$marker=(@{enginePath=$repo;profilePath=$profileDir} | ConvertTo-Json)}
+$known=@()
+if(Test-Path -LiteralPath $marker){
+ $previous=Get-Content -Raw -LiteralPath $marker | ConvertFrom-Json
+ $known=@($previous.profiles)+@($previous.profilePath)
+}
+$known=@(@($known)+@($profileDir) | Where-Object {$_} | Sort-Object -Unique)
+$changes=@{$marker=(@{enginePath=$repo;profilePath=$profileDir;profiles=$known} | ConvertTo-Json)}
 foreach($lock in @((Join-Path $profileDir 'pnpm-lock.yaml'),(Join-Path $profileDir 'node_modules/.pnpm/lock.yaml'))){
  if(Test-Path -LiteralPath $lock){
   $value=[IO.File]::ReadAllText($lock)
