@@ -315,6 +315,7 @@ function RunBody({r}){
    typeof r.sourceChars==='number'?h('span',null,'原文 ',h('b',null,fmt(r.sourceChars)),' 字'):null,
    mode.length?h('span',null,mode.join('，')):null,
    r.trigger?h('span',null,'入口：',({manual:'手动命令',tool:'会话工具',auto:'自动压缩',direct:'直接调用'})[r.trigger]||r.trigger):null,
+   r.policyVersion!==undefined?h('span',null,'摘要策略 v'+r.policyVersion+((r.policyRules||[]).length?' · '+r.policyRules.join(' / '):'')):null,
    r.configFingerprint?h('span',{title:r.configFingerprint},'配置指纹 ',r.configFingerprint.slice(0,12)):null,
    r.retryAfter?h('span',null,'自动重试最早时间 ',new Date(r.retryAfter).toLocaleString()):null,
    r.status==='validated'?h('span',null,'已通过校验，是否写回以引擎记录为准'):null),
@@ -391,8 +392,8 @@ function Panel(){
   }catch(e){setFlash({tone:'bad',text:'没有保存：'+(e.message||'请求失败')});}
   finally{pendingSave.current=false;setSaving(false);}
  }
- async function replay(){
-  try{const response=await fetch(API,{method:'POST',headers:{'content-type':'application/json','x-dsh-compaction-csrf':state.csrf},body:JSON.stringify({action:'run-fixture-replay'})});
+ async function replay(action="run-fixture-replay"){
+  try{const response=await fetch(API,{method:'POST',headers:{'content-type':'application/json','x-dsh-compaction-csrf':state.csrf},body:JSON.stringify({action,version:state.replay?.policy?.active?.version})});
    const value=await response.json();if(!response.ok)throw Error(value.error||'请求失败');setState(value);}
   catch(e){setFlash({tone:'bad',text:e.message});}
  }
@@ -411,9 +412,16 @@ function Panel(){
   h(R.Fragment,null,
    h(Flow,{d:draft,set,saved:base?String(base.enabled)===String(draft.enabled):true}),
    h('p',{className:'dcc-lede'},state?.retrieval?.enabled===true?'大工具结果按需取回已配置。Anthropic / OpenAI Chat Completions 插件通道从 '+state.retrieval.minToolTokens+' tokens 起可保留原件，以 '+state.retrieval.tool+' 取回。Responses 浏览器任务通过 browser_progress 查看证据。':state?.retrieval?.enabled===false?'大工具结果按需取回未开启。':'大工具结果取回配置暂未读到。'),
-   h('details',{className:'dcc-more'},h('summary',null,'三路回放 · 合成样例'),
-    h('p',null,'同一模型分别处理完整原文、摘要和可查原文的摘要。每次运行消耗模型调用；全程只读，不进入正式聊天或记忆。'),
-    h('button',{className:'dcc-btn',disabled:!state?.config?.enabled||state?.replay?.running,onClick:replay},state?.replay?.running?'正在回放…':'运行三路回放'),
+   h('details',{className:'dcc-more'},h('summary',null,'三路回放与自动压缩策略'),
+    h('label',{className:'dcc-master'},h(Switch,{checked:!!draft.replayFeedbackEnabled,label:'回放验证后自动应用压缩策略',onChange:v=>set('replayFeedbackEnabled',v)}),'回放验证后自动应用'),
+    h('p',null,'启用后，成功压缩可以在后台触发每七天至多一次的合成回放。也可手动运行。验证会调用当前配置的完整压缩流水线来比较新旧策略，包含独立留出样例及摘要充足的正对照。'),
+    h('p',null,'当前实际策略 v'+(state?.replay?.effectivePolicy?.version??0)+' · '+((state?.replay?.effectivePolicy?.rules||[]).join(' / ')||'基础策略')),
+    state?.replay?.effectivePolicy?.proof?h('details',null,h('summary',null,'当前策略采用时的验证记录'),h('pre',{className:'dcc-raw'},JSON.stringify(state.replay.effectivePolicy.proof,null,2))):null,
+    state?.replay?.policy?.last?h('p',null,clock(state.replay.policy.last.at)+' · '+state.replay.policy.last.reason):null,
+    state?.replay?.policy?.last?.before?h('details',null,h('summary',null,'查看旧策略与候选的逐项证据'),h('pre',{className:'dcc-raw'},JSON.stringify({before:state.replay.policy.last.before,after:state.replay.policy.last.after,gates:state.replay.policy.last.gates,proposed:state.replay.policy.last.proposed},null,2))):null,
+    state?.replay?.policy?.previous?h('button',{className:'dcc-btn',disabled:state.replay.running,onClick:()=>replay('rollback-replay-policy')},'恢复上一策略'):null,
+    h('p',null,'同一模型分别处理完整原文、摘要和可查原文的摘要。每次运行消耗模型调用。样例与回放答案保存在本机诊断记录内，通过验证的策略从下一次压缩开始使用。'),
+    h('button',{className:'dcc-btn',disabled:!state?.config?.enabled||state?.replay?.running,onClick:()=>replay()},state?.replay?.running?'正在回放…':'运行三路回放'),
     state?.replay?.error?h('p',null,state.replay.error):null,
     state?.replay?.report?h('p',null,state.replay.report.provider+' / '+state.replay.report.model+' · '+clock(state.replay.report.at)):null,
     ...(state?.replay?.report?.probes||[]).map(p=>h('p',{key:p.id},(replayLabels[p.id]||p.id)+' · '+(replayLabels[p.classification]||p.classification)+' · '+['full','summary','retrieval'].map((k,i)=>['原文','摘要','可回查'][i]+(p.lanes[k].pass?'通过':p.lanes[k].error?'出错':'未通过')).join(' / ')))),

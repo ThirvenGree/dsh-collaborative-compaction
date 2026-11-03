@@ -39,6 +39,7 @@
     "host.js",
     "runtime.js",
     "replay.js",
+    "feedback.js",
     "token-budget.js",
     "token-worker.js",
     "client.js",

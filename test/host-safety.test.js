@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 process.env.DSH_COLLAB_TEST_HOME=fs.mkdtempSync(path.join(os.tmpdir(),'collab-host-'));
-const {body,syncEngine:sync,saveSettings}=await import('../host.js');
+const {body,syncEngine:sync,saveSettings,settingsAction}=await import('../host.js');
 // Unit tests run independently of the separately built upstream engine.
 const testSchema=engine=>assert.ok(engine.compress.externalSummary.enabled);
 const syncEngine=(settings,port,token)=>sync(settings,port,token,testSchema);
@@ -126,4 +126,11 @@ test('multi-profile import uses last install; legacy data follows original profi
  const dest=path.join(owner,'collaborative-compaction');assert.equal(fs.readFileSync(path.join(dest,'local-token'),'utf8'),'PRIVATE_FIXTURE');
  assert.equal(fs.readFileSync(path.join(dest,'config.json'),'utf8'),'{"enabled":true}');assert.ok(fs.existsSync(path.join(dest,'engine-before-0123456789abcdef.json')));
  assert.ok(!fs.existsSync(path.join(dest,'host.json')));fs.unlinkSync(path.join(dest,'local-token'));run({DSH_PROFILE_DIR:owner});assert.ok(!fs.existsSync(path.join(dest,'local-token')));
+});
+
+test('unknown actions never enter the legacy settings save path',()=>{
+ assert.equal(settingsAction({enabled:false}),'save');
+ assert.equal(settingsAction({changes:{enabled:true}}),'save');
+ assert.equal(settingsAction({action:'rollback-replay-policy',version:1}),'rollback-replay-policy');
+ for(const action of ['rollback-policy','save','',null])assert.throws(()=>settingsAction({action}),/Unknown settings action/);
 });
