@@ -38,6 +38,7 @@
   "files": [
     "host.js",
     "runtime.js",
+    "replay.js",
     "token-budget.js",
     "token-worker.js",
     "client.js",
@@ -47,7 +48,8 @@
     "patches",
     "install.ps1",
     "prepare-engine.ps1",
-    "live-test.mjs"
+    "live-test.mjs",
+    "replay-live.mjs"
   ],
   "dependencies": {
     "js-tiktoken": "^1.0.21"

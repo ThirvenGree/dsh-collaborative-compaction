@@ -357,6 +357,7 @@ function Runs({runs,notice,onRefresh}){
   })));
 }
 
+const replayLabels={'omitted-tool':'原工具名','later-correction':'后续更正','unconfirmed-click':'操作未确认','adequate-summary-control':'摘要充足对照','execution-error':'调用出错','baseline-inconclusive':'原文对照未通过','summary-sufficient':'摘要足够','retrieval-regression':'回查组退步','citation-recovered':'回查补齐引用','correct-answer-without-grounding':'行为正确但引文不足','recovered-by-recall':'回查恢复','did-not-search':'未发起回查','search-missed-evidence':'未查到关键依据','evidence-returned-answer-failed':'已查到依据但没有正确使用'};
 function Panel(){
  const [state,setState]=R.useState(null),[draft,setDraft]=R.useState(null),[loadError,setLoadError]=R.useState('');
  const [tab,setTab]=R.useState('settings'),[saving,setSaving]=R.useState(false),[flash,setFlash]=R.useState(null);
@@ -390,6 +391,11 @@ function Panel(){
   }catch(e){setFlash({tone:'bad',text:'没有保存：'+(e.message||'请求失败')});}
   finally{pendingSave.current=false;setSaving(false);}
  }
+ async function replay(){
+  try{const response=await fetch(API,{method:'POST',headers:{'content-type':'application/json','x-dsh-compaction-csrf':state.csrf},body:JSON.stringify({action:'run-fixture-replay'})});
+   const value=await response.json();if(!response.ok)throw Error(value.error||'请求失败');setState(value);}
+  catch(e){setFlash({tone:'bad',text:e.message});}
+ }
  const [tone,healthText]=healthOf(state,loadError);
  const runs=state?.runs||[];
  const failed=runs.filter(r=>r.status==='failed').length;
@@ -405,6 +411,12 @@ function Panel(){
   h(R.Fragment,null,
    h(Flow,{d:draft,set,saved:base?String(base.enabled)===String(draft.enabled):true}),
    h('p',{className:'dcc-lede'},state?.retrieval?.enabled===true?'大工具结果按需取回已配置。Anthropic / OpenAI Chat Completions 插件通道从 '+state.retrieval.minToolTokens+' tokens 起可保留原件，以 '+state.retrieval.tool+' 取回。Responses 浏览器任务通过 browser_progress 查看证据。':state?.retrieval?.enabled===false?'大工具结果按需取回未开启。':'大工具结果取回配置暂未读到。'),
+   h('details',{className:'dcc-more'},h('summary',null,'三路回放 · 合成样例'),
+    h('p',null,'同一模型分别处理完整原文、摘要和可查原文的摘要。每次运行消耗模型调用；全程只读，不进入正式聊天或记忆。'),
+    h('button',{className:'dcc-btn',disabled:!state?.config?.enabled||state?.replay?.running,onClick:replay},state?.replay?.running?'正在回放…':'运行三路回放'),
+    state?.replay?.error?h('p',null,state.replay.error):null,
+    state?.replay?.report?h('p',null,state.replay.report.provider+' / '+state.replay.report.model+' · '+clock(state.replay.report.at)):null,
+    ...(state?.replay?.report?.probes||[]).map(p=>h('p',{key:p.id},(replayLabels[p.id]||p.id)+' · '+(replayLabels[p.classification]||p.classification)+' · '+['full','summary','retrieval'].map((k,i)=>['原文','摘要','可回查'][i]+(p.lanes[k].pass?'通过':p.lanes[k].error?'出错':'未通过')).join(' / ')))),
    h('div',{className:'dcc-tabs',role:'tablist'},
     h('button',{type:'button',role:'tab',id:'dcc-tab-settings','aria-selected':tab==='settings'?'true':'false','aria-controls':'dcc-panel-settings',className:'dcc-tab',onClick:()=>setTab('settings')},'设置',changes.length?h('span',{className:'dcc-count'},`${changes.length} 项未保存`):null),
     h('button',{type:'button',role:'tab',id:'dcc-tab-runs','aria-selected':tab==='runs'?'true':'false','aria-controls':'dcc-panel-runs',className:'dcc-tab',onClick:()=>setTab('runs')},'运行记录',failed?h('span',{className:'dcc-count dcc-tone-bad'},`${failed} 次失败`):null)),

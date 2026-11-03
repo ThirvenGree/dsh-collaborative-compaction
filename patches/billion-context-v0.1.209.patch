@@ -684,7 +684,7 @@ index 56b565b2d39da6fbfd2680c0c9a9763fd445d463..234792911005a1e8abe0ee4209118fc8
          for (const item of batch.results) this.stats.attempts += item.attempts.length;
          return batch;
 diff --git a/src/external-summary-settings.ts b/src/external-summary-settings.ts
-index 4e0278882c839c159a5e7ffaeeae2c9bc68b7591..d4239607f13ec4fa914ace968a91c7e90c813a56 100644
+index 4e0278882c839c159a5e7ffaeeae2c9bc68b7591..0db09eec3605e2dff7ebe384cae54448ef67cf5d 100644
 --- a/src/external-summary-settings.ts
 +++ b/src/external-summary-settings.ts
 @@ -40,6 +40,7 @@ export interface ExternalSummarySettings {
@@ -748,6 +748,12 @@ index 4e0278882c839c159a5e7ffaeeae2c9bc68b7591..d4239607f13ec4fa914ace968a91c7e9
          const message = error instanceof Error ? error.message : String(error);
          if (!seenExpansionWarnings.has(message)) {
              seenExpansionWarnings.add(message);
+@@ -322,3 +326,5 @@ export function expandExternalSummaryChainTolerant(chain: ExternalSummaryChain,
+         return { enabled: false, targets: [], budget: SUMMARY_DEFAULT_BUDGET };
+     }
+ }
++
++export { searchEvidence } from "./search-evidence.js";
 diff --git a/src/external-summary.ts b/src/external-summary.ts
 index 622eceb4e5c8ad28f63bc5095be846b7cebb20ff..7447c5fecc0a47be763a2cc0e5338b2de675b632 100644
 --- a/src/external-summary.ts
@@ -1032,10 +1038,10 @@ index 0af1155dd3e48b5378fa92f2ddd7fdc636979e21..00b9120a1480eb5b56bec936dbd860b0
                                      deps.log("warn", `[preflight] range ${skipKey}: assembled summary ${candidate.length} chars exceeded maxSummaryLength (${maxSummary}); truncated to ${rescued.length} chars`);
 diff --git a/src/search-evidence.ts b/src/search-evidence.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ef288cee6612e4c44646500cd18c29cce89f8756
+index 0000000000000000000000000000000000000000..c8bdcb6ab6b68cf9764323dfaaff31dc1626be79
 --- /dev/null
 +++ b/src/search-evidence.ts
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,126 @@
 +import { createHash } from "node:crypto";
 +import type { CoreMessage, MessageContentStore } from "acp-kernel";
 +import type { BiliMessage } from "acp-kernel/wire";
@@ -1069,7 +1075,7 @@ index 0000000000000000000000000000000000000000..ef288cee6612e4c44646500cd18c29cc
 +}
 +
 +/** Original-message recall is current-session only. Foreign-session delegation retains summary-only semantics. */
-+export function searchEvidence(session: Session, query: string, limit: number, view: CoreMessage[], persisted: SearchTranscriptRow[], store?: MessageContentStore): string {
++export function searchEvidence(session: Session, query: string, limit: number, view: CoreMessage[], persisted: SearchTranscriptRow[], store?: MessageContentStore, observe?: (id: string, text: string) => void): string {
 +    const read = /^open:(ev-[a-f0-9]{24})(?::(\d{1,12}))?$/.exec(query.trim());
 +    const scoped = /^block:(b\d+)\s+(.+)$/is.exec(query);
 +    const searchText=(scoped?.[2]??query).trim().toLowerCase();
@@ -1116,6 +1122,7 @@ index 0000000000000000000000000000000000000000..ef288cee6612e4c44646500cd18c29cc
 +        const offset=Number(read[2]||0);
 +        if(offset>=n.text.length)return "[Original evidence page is beyond the end.]";
 +        const body=safePrefix(n.text.slice(offset),pageSize);
++        observe?.(n.key,body);
 +        return `[Evidence: ${cite(n)} | ${offset}–${offset+body.length}/${n.text.length}]\n${body}`+(offset+body.length<n.text.length?`\n[next query: open:${read[1]}:${offset+body.length}]`:"");
 +    }
 +
@@ -1132,6 +1139,8 @@ index 0000000000000000000000000000000000000000..ef288cee6612e4c44646500cd18c29cc
 +    hits.sort((a,b)=>b.score-a.score||b.order-a.order);
 +    const renderHit=({note,order,at}:Hit)=>{
 +        const start=Math.max(0,at-90);
++        observe?.(note.key,safePrefix(note.text.slice(start),270));
++        if(order<messageCount)for(const i of [order-1,order+1])if(i>=0&&i<messageCount)observe?.(notes[i]!.key,safePrefix(notes[i]!.text,125));
 +        const nearby=order<messageCount?[order-1,order+1].filter(i=>i>=0&&i<messageCount).map(i=>`  ${i<order?"previous":"next"}: ${cite(notes[i]!)} — ${safePrefix(notes[i]!.text,125)}`):[];
 +        const correctedBy=notes.filter(n=>n.corrects&&(n.corrects===note.key||n.corrects===note.ref)).slice(-3);
 +        return [cite(note),`  ${start?"…":""}${safePrefix(note.text.slice(start),270)}`,
