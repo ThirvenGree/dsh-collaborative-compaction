@@ -9,7 +9,7 @@ import {promisify} from 'node:util';
 const exec=promisify(execFile);
 export const dataRoot=process.env.DSH_COLLAB_TEST_HOME||path.join(os.homedir(),'.dsh','collaborative-compaction');
 export const defaults={enabled:false,claudeEnabled:true,reviewEnabled:true,plannerEnabled:true,plannerModel:'gpt-6.1-terra',factCheckEnabled:true,verificationProvider:'claude',verificationModel:'claude-sonnet-5-5',aProvider:'deepseek-account',aModel:'deepseek-flash',claudeModel:'claude-sonnet-5-5',claudeBase:'https://api.anthropic.com/v1',claudeKeyEnv:'ANTHROPIC_API_KEY',reviewModel:'gpt-6.1-terra',reviewBase:'https://api.openai.com/v1',reviewKeyEnv:'OPENAI_API_KEY',reasoningEffort:'medium',timeoutMs:540000,plannerTimeoutMs:30000,plannerOutputTokens:2048,claudeOutputTokens:24576,reviewOutputTokens:49152,verificationOutputTokens:16384,verificationMaxFacts:24,retries:1,maxSummaryChars:12000,claudeContextTokens:1000000,reviewContextTokens:1050000,outputTokens:16384,preserveRecentTokens:16000,autoFoldTargetTokens:80000};
-export function config(){try{const saved=JSON.parse(fs.readFileSync(path.join(dataRoot,'config.json'),'utf8'));if(saved.verificationProvider===undefined&&saved.verificationModel?.startsWith('gpt-'))saved.verificationProvider='openai';return validateConfig({...defaults,...saved});}catch(e){if(e.code==='ENOENT')return {...defaults};throw e;}}
+export function config(){try{const saved=JSON.parse(fs.readFileSync(path.join(dataRoot,'config.json'),'utf8'));if(saved.verificationProvider===undefined&&saved.verificationModel?.startsWith('gpt-'))saved.verificationProvider='openai';if(Number.isInteger(saved.autoFoldTargetTokens)&&saved.autoFoldTargetTokens>=2000&&saved.autoFoldTargetTokens<8192)saved.autoFoldTargetTokens=8192;return validateConfig({...defaults,...saved});}catch(e){if(e.code==='ENOENT')return {...defaults};throw e;}}
 
 export function validateConfig(c){
  c={...defaults,...c};
@@ -19,7 +19,7 @@ export function validateConfig(c){
  for(const k of ['claudeBase','reviewBase']){const u=new URL(c[k]);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash)throw Error('Provider URL must be HTTPS without credentials');}
  for(const k of ['aProvider','aModel','claudeModel','reviewModel','plannerModel','verificationModel'])if(typeof c[k]!=='string'||!c[k].trim()||c[k].length>100)throw Error('Invalid model');
  if(!['none','low','medium','high','xhigh','max'].includes(c.reasoningEffort))throw Error('Invalid reasoning effort');
- for(const [k,lo,hi]of [['timeoutMs',1000,580000],['plannerTimeoutMs',1000,120000],['plannerOutputTokens',256,128000],['claudeOutputTokens',256,128000],['reviewOutputTokens',256,128000],['verificationOutputTokens',256,128000],['verificationMaxFacts',1,100],['retries',0,3],['maxSummaryChars',100,100000],['claudeContextTokens',4096,2000000],['reviewContextTokens',4096,2000000],['outputTokens',256,128000],['preserveRecentTokens',1000,100000],['autoFoldTargetTokens',2000,900000]])if(!Number.isSafeInteger(c[k])||c[k]<lo||c[k]>hi)throw Error('Invalid '+k);
+ for(const [k,lo,hi]of [['timeoutMs',1000,580000],['plannerTimeoutMs',1000,120000],['plannerOutputTokens',256,128000],['claudeOutputTokens',256,128000],['reviewOutputTokens',256,128000],['verificationOutputTokens',256,128000],['verificationMaxFacts',1,100],['retries',0,3],['maxSummaryChars',100,100000],['claudeContextTokens',4096,2000000],['reviewContextTokens',4096,2000000],['outputTokens',256,128000],['preserveRecentTokens',1000,100000],['autoFoldTargetTokens',8192,10000000]])if(!Number.isSafeInteger(c[k])||c[k]<lo||c[k]>hi)throw Error('Invalid '+k);
  return Object.fromEntries(Object.keys(defaults).map(k=>[k,c[k]]));
 }
 export function saveConfig(value){const c=validateConfig({...config(),...value});atomic(path.join(dataRoot,'config.json'),c);return c;}
@@ -36,10 +36,12 @@ export async function getKey(name){
 export function validateSummary(text,work,c=defaults){const cap=Math.min(work.maxSummaryChars||c.maxSummaryChars,c.maxSummaryChars);if(typeof text!=='string'||text.trim().length<(work.minSummaryChars||1))throw Error('Summary is empty or too short');if(text.trim().length>cap)throw Error('Summary exceeds character budget');return text.trim();}
 function safeError(e){return e?.code==='ETIMEDOUT'?'Network timeout':String(e?.message||'Request failed').replace(/(?:sk-|AIza)[\w-]+/g,'[redacted]').slice(0,240);}
 export function criticalLiterals(text){
+ // Markdown link delimiters are presentation, not part of the target.
+ text=text.replace(/\]\((https?:\/\/[^\s()]+)\)/gi,'] $1 ');
  text=text.replace(/^\s*\d+[.)、](?!\d)\s*/gm,'');
- const patterns=[/\d+(?:\.\d+)?\s*(?:元|万元|亿元|美元|人民币|%|％|毫秒|秒|分钟|小时|天|日|号|年|月|米|厘米|公斤|千克|克|GB|MB|KB|USD|CNY)(?![A-Za-z])/g,/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g,/\d{1,4}年\d{1,2}月\d{1,2}[日号]/g,/\d{1,2}月\d{1,2}[日号]/g,/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s+\d{4})?\b/g,/[A-Za-z]:[\\/][^\s"<>|，。；]+/g,/(?:https?:\/\/|\/)[A-Za-z0-9_./?=&%:#~-]+/g,/\d+(?:[.,]\d+)*/g,/\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|[A-Z]{2,})\b/g];
+ const patterns=[/\d+(?:\.\d+)?\s*(?:元|万元|亿元|美元|人民币|%|％|毫秒|秒|分钟|小时|天|日|号|年|月|米|厘米|公斤|千克|克|GB|MB|KB|USD|CNY)(?![A-Za-z])/g,/\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/g,/\d{1,4}年\d{1,2}月\d{1,2}[日号]/g,/\d{1,2}月\d{1,2}[日号]/g,/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s+\d{4})?\b/g,/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"<>|，。；]+/g,/(?:https?:\/\/|\/)[A-Za-z0-9_./?=&%:#~-]+/g,/\d+(?:[.,]\d+)*/g,/\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|[A-Z]{2,})\b/g];
  const headings=new Set(['TASK','AS','OF','TODO','DONE','SUMMARY']);
- return [...new Set(patterns.flatMap(re=>text.match(re)||[]).map(x=>x.replace(/[.,;:]+$/,'')).filter(x=>!headings.has(x)))];
+ return [...new Set(patterns.flatMap(re=>text.match(re)||[]).map(x=>x.replace(/[.,;:]+$/,'').replace(/^(\d+(?:\.\d+)?)\s+(?=(?:元|万元|亿元|美元|人民币|%|％|毫秒|秒|分钟|小时|天|日|号|年|月|米|厘米|公斤|千克|克|GB|MB|KB|USD|CNY)$)/,'$1')).filter(x=>!headings.has(x)))];
 }
 export function validateLiterals(summary,source){
  const allowed=new Set(criticalLiterals(source));const missing=criticalLiterals(summary).filter(x=>!allowed.has(x));
@@ -91,7 +93,7 @@ export async function runPipeline(work,generateA,{signal,settings=config(),trans
    }catch(e){entry.status='failed';entry.error=safeError(e);throw e;}finally{entry.elapsedMs=Date.now()-entry.startedAt;atomic(file,record);}
   }
   combined.throwIfAborted();record.status='validated';record.summaryHash=createHash('sha256').update(final).digest('hex');return validateSummary(final,work,c);
- }catch(e){controller.abort();record.status='failed';record.error=safeError(e);throw Error('Collaborative compression: '+safeError(e));}
+ }catch(e){controller.abort();record.status='failed';record.error=safeError(e);const failed=record.stages.find(s=>s.status==='failed' && s.error===record.error);throw Error('run='+id+' stage='+(failed?.name || 'pipeline')+' '+safeError(e));}
  finally{clearTimeout(timer);record.finishedAt=Date.now();record.elapsedMs=record.finishedAt-record.startedAt;atomic(file,record);}
 }
 function runFiles(){try{return fs.readdirSync(path.join(dataRoot,'runs')).filter(x=>x.endsWith('.json')).map(name=>({name,mtime:fs.statSync(path.join(dataRoot,'runs',name)).mtimeMs})).sort((a,b)=>b.mtime-a.mtime);}catch{return [];}}
@@ -123,5 +125,5 @@ export async function planCompression(input,{settings=config(),signal,transport=
   const p=result.value;
   if(!['now','wait','uncertain'].includes(p.decision)||typeof p.reason!=='string'||!Array.isArray(p.ranges)||p.ranges.length>32||p.ranges.some(r=>typeof r.startId!=='string'||typeof r.endId!=='string')||(p.decision==='now')!==(p.ranges.length>0))throw Error('Invalid planner decision');
   record.status='decided';record.decision=p.decision;record.reason=p.reason.slice(0,500);record.ranges=p.ranges;record.usage=result.usage;return {...p,reason:record.reason};
- }catch(e){record.status='failed';record.error=safeError(e);throw e;}finally{record.elapsedMs=Date.now()-record.startedAt;atomic(file,record);}
+ }catch(e){record.status='failed';record.error=safeError(e);throw Error('run='+record.id+' stage=planning '+record.error);}finally{record.elapsedMs=Date.now()-record.startedAt;atomic(file,record);}
 }

@@ -61,10 +61,10 @@ index 779ec5f..81bc458 100644
      // globalThis.fetch from inside a test run.
 diff --git a/src/collaborative-planner.ts b/src/collaborative-planner.ts
 new file mode 100644
-index 0000000..7551ac0
+index 0000000..9c6e74b
 --- /dev/null
 +++ b/src/collaborative-planner.ts
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,44 @@
 +import type { CoreMessage } from "acp-kernel";
 +import type { Session } from "./session.js";
 +import type { ResolvedKernelConfig } from "./compress-settings.js";
@@ -92,7 +92,11 @@ index 0000000..7551ac0
 +        omittedMessageCount: Math.max(0,visible.length-600), recentContext: rows.slice(-6) };
 +    const timeout = AbortSignal.timeout(config.externalSummary?.budget.totalTimeoutMs ?? 180000);
 +    const response = await fetch(url, { method: "POST", headers: { authorization: "Bearer " + key, "content-type": "application/json" }, body: JSON.stringify(input), signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-+    if (!response.ok) throw new Error("Planner failed: HTTP " + response.status);
++    if (!response.ok) {
++        const body = await response.json().catch(() => null);
++        const receipt = String(body?.error || "").match(/run=[0-9a-f-]{36} stage=planning\b/)?.[0] || "";
++        throw new Error("Planner HTTP " + response.status + " " + receipt);
++    }
 +    const p = await response.json() as PlanDecision;
 +    if (!["now","wait","uncertain","legacy"].includes(p.decision) || !Array.isArray(p.ranges) || p.ranges.length>32) throw new Error("Invalid planner response");
 +    if(p.decision === "legacy") return p;
@@ -107,7 +111,7 @@ index 0000000..7551ac0
 +}
 diff --git a/src/collaborative-transaction.ts b/src/collaborative-transaction.ts
 new file mode 100644
-index 0000000..609983b
+index 0000000..8c85ef1
 --- /dev/null
 +++ b/src/collaborative-transaction.ts
 @@ -0,0 +1,72 @@
@@ -126,7 +130,7 @@ index 0000000..609983b
 +    const state = session.state, epoch = session.revisionEpoch;
 +    const stateSnapshot = structuredClone(state);
 +    const history = JSON.stringify(session.lastMessages);
-+    const baseStats = structuredClone(session.stats), baseMetadata = structuredClone(session.metadata);
++    const baseStats = structuredClone(session.stats), baseMetadata = structuredClone({ ...session.metadata });
 +    const baseBlocks = new Map([...session.blockContents].map(([id, value]) => [id, structuredClone(value)]));
 +    const baseLastCompress = structuredClone(session.lastCompress);
 +    const liveStore = ccrEnabled(session) ? contentStoreOf(session) : session.contentStore;
@@ -184,10 +188,15 @@ index 0000000..609983b
 +
 +export function collaborativePlanningEnabled(config: unknown): boolean { return collaborativeEnabled(config) && (config as ResolvedKernelConfig).externalSummary?.modelPlanning !== false; }
 diff --git a/src/external-summary-compress.ts b/src/external-summary-compress.ts
-index 24c0d21..ce74606 100644
+index 24c0d21..125cfc1 100644
 --- a/src/external-summary-compress.ts
 +++ b/src/external-summary-compress.ts
-@@ -7,6 +7,8 @@ import { compressResult, type ProxyToolResult } from "./proxy-tool-result.js";
+@@ -1,3 +1,4 @@
++import { randomUUID } from "node:crypto";
+ import { collectBlockContent } from "acp-kernel";
+ import { buildCompressSystemPrompt, parseCompressInput, type ParsedRange } from "./compress-tool.js";
+ import { configuredSummaryPlan } from "./external-summary-runtime.js";
+@@ -7,6 +8,8 @@ import { compressResult, type ProxyToolResult } from "./proxy-tool-result.js";
  import { imagePlaceholders } from "./image-note.js";
  import { describeExternalSummaryFailure, summaryLengthBudgetClause, type SummaryWork } from "./external-summary.js";
  import { newExternalCallId } from "./external-summary-marker.js";
@@ -196,29 +205,39 @@ index 24c0d21..ce74606 100644
  
  // Re-exported for callers that historically imported it here; the canonical
  // home is the leaf module (kept import-graph-light for display surfaces).
-@@ -33,7 +35,28 @@ function withOptionalSummaries(input: unknown): unknown {
+@@ -33,7 +36,38 @@ function withOptionalSummaries(input: unknown): unknown {
  }
  
  /** Called under the host session lock; generation is separate from kernel commit. */
 -export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal): Promise<ProxyToolResult> {
 +export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx, callId?: string, signal?: AbortSignal, planned = false): Promise<ProxyToolResult> {
 +    if (!collaborativeEnabled(ctx.config)) return applyConfiguredCompressionInner(input, ctx, callId, signal);
-+    const transaction = compressionDraft(ctx.session);
++    const requestId = callId || randomUUID();
++    let stage = "snapshot";
 +    try {
++        const transaction = compressionDraft(ctx.session);
 +        let selected = input;
 +        if (!planned) {
++            stage = "input-ranges";
 +            const parsed = parseCompressInput(withOptionalSummaries(input), callId);
 +            if (parsed.diagnostics.invalidItems > 0 || !parsed.ranges.length) throw new Error("Invalid input ranges");
++            stage = "planning";
 +            const decision = await planHistory(ctx.config as ResolvedKernelConfig, transaction.draft, ctx.compressMessages ?? ctx.messages, parsed.ranges.map(r=>({startId:r.startRef,endId:r.endRef})), true, signal);
 +            if (decision.decision === "wait" || decision.decision === "uncertain") return compressResult("[Compression deferred by model: " + decision.decision + ". Nothing changed.]", "refused", 0);
 +            if (decision.decision === "now") selected = {content: decision.ranges};
 +        }
++        stage = "generation";
 +        const result = await applyConfiguredCompressionInner(selected, { ...ctx, session: transaction.draft }, callId, signal);
-+        if (result.outcome !== "applied" || signal?.aborted) return compressResult("[Compression FAILED: collaborative batch not fully accepted. Originals retained.]", "refused", 0);
++        if (result.outcome !== "applied" || signal?.aborted) {
++            const detail = result.outcome === "refused" ? result.text : "Cancelled or incomplete batch";
++            return compressResult(`[Compression FAILED: request=${requestId} stage=${stage}] ${detail} Originals retained.`, "refused", 0);
++        }
++        stage = "source-version";
 +        transaction.commit();
 +        return result;
-+    } catch {
-+        return compressResult("[Compression FAILED: collaborative generation, validation or source-version check failed. Originals retained.]", "refused", 0);
++    } catch (error) {
++        const details = String(error).match(/Planner HTTP \d{3}(?: run=[0-9a-f-]{36} stage=planning)?/)?.[0] || "";
++        return compressResult(`[Compression FAILED: request=${requestId} stage=${stage} ${details}. Originals retained.]`, "refused", 0);
 +    }
 +}
 +
@@ -226,7 +245,15 @@ index 24c0d21..ce74606 100644
      if (signal?.aborted) return compressResult("[Compression FAILED: cancelled. Nothing compressed.]", "refused", 0);
      // The plan rides the request Config rail (#833: ctx.config is the
      // session's effective Config — same cascade that produced the wire).
-@@ -62,6 +85,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+@@ -53,6 +87,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+         const notes = imagePlaceholders(message);
+         return notes.length > 0 ? { ...message, text: `${message.text ?? ""}\n${notes.join(" ")}` } : message;
+     });
++    const failures: string[] = [];
+     const work: SummaryWork[] = [];
+     const valid: ParsedRange[] = [];
+     // Kernel protection and aggregate size checks must see the complete batch.
+@@ -62,6 +97,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
          return { ...range, summary: (`external-probe-${index}:`).padEnd(length, "x").slice(0, length) };
      });
      const preview = ctx.core.applyCompression({ messages, state, config: ctx.config, ranges: probes });
@@ -234,7 +261,7 @@ index 24c0d21..ce74606 100644
      const before = new Map(state.blocks.map((block) => [block.blockId, block]));
      const source = messages.map((message) => ({ ...message, text:
          `[${state.messageRefs.byRaw[message.id] ?? message.id}] ${message.text ?? ""}` }));
-@@ -70,7 +94,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+@@ -70,7 +106,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
              && before.get(candidate.blockId)?.summary !== candidate.summary);
          if (blocks.length === 0) continue;
          const content = blocks.map((block) => {
@@ -243,16 +270,23 @@ index 24c0d21..ce74606 100644
              if (collected.trim()) return collected;
              // An inline-restored block may no longer have originals in the wire view.
              const cached = ctx.session.blockContents.get(block.blockId);
-@@ -96,6 +120,7 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+@@ -90,12 +126,13 @@ export async function applyConfiguredCompression(input: unknown, ctx: RewriteCtx
+         // — the preflight path has told its summarizers this number since #1775;
+         // without it the compress path asked for output it could never accept.
+         const maxSummaryChars = Math.min(range.summaryMaxChars ?? Infinity, ctx.config.compress.maxSummaryLength);
+-        work.push({ content, reference, minSummaryChars: ctx.config.compress.minSummaryLength, maxSummaryChars,
++        work.push({ content, reference, onCollaborativeFailure: receipt => failures.push(range.startRef+"-"+range.endRef+" "+receipt), minSummaryChars: ctx.config.compress.minSummaryLength, maxSummaryChars,
+             instructions: `${ctx.session.meta.summaryInstructions ?? buildCompressSystemPrompt()}\nWrite a faithful summary of the selected range ${range.startRef}-${range.endRef}. Preserve task status, constraints, decisions, exact code identifiers, paths and errors, and unfinished objectives with their source message refs. Submitted summary hints are non-authoritative. Never summarize or change the read-only reference.`
+                 + summaryLengthBudgetClause(maxSummaryChars, ctx.config.compress.minSummaryLength) });
      }
      if (work.length === 0) return compressResult("[Compression FAILED: no selected range passed the existing kernel protection checks. Nothing compressed.]", "refused", 0);
      const batch = await plan.summarize(work, signal);
-+    if (collaborativeEnabled(ctx.config) && (valid.length !== parsed.ranges.length || batch.results.length !== work.length || batch.results.some((result) => result.status !== "success"))) return compressResult("[Compression FAILED: collaborative batch incomplete; nothing committed.]", "refused", 0);
++    if (collaborativeEnabled(ctx.config) && (valid.length !== parsed.ranges.length || batch.results.length !== work.length || batch.results.some((result) => result.status !== "success"))) return compressResult(`[Compression FAILED: collaborative batch incomplete; ${failures.join(", ") || describeExternalSummaryFailure(batch)}. Nothing committed.]`, "refused", 0);
      if (signal?.aborted || ctx.session.state !== state || ctx.session.revisionEpoch !== revision) return compressResult("[Compression FAILED: cancelled or session changed while generating external summaries. Nothing compressed.]", "refused", 0);
      const successful: ParsedRange[] = [];
      for (const [index, result] of batch.results.entries()) {
 diff --git a/src/external-summary-http.ts b/src/external-summary-http.ts
-index dd6f743..51f6321 100644
+index dd6f743..39a861d 100644
 --- a/src/external-summary-http.ts
 +++ b/src/external-summary-http.ts
 @@ -228,6 +228,7 @@ export function createSummaryHttpCandidate(target: SummaryHttpTarget, maxRespons
@@ -263,6 +297,17 @@ index dd6f743..51f6321 100644
              if (plan.outputTokens !== undefined) {
                  if (plan.contextWindow !== undefined && defaultCountTokens(system) + defaultCountTokens(content) + 256 + plan.outputTokens > plan.contextWindow) throw new Error("External summary input exceeds the target context budget");
                  if (plan.protocol === "google") {
+@@ -293,6 +294,10 @@ export function createSummaryHttpCandidate(target: SummaryHttpTarget, maxRespons
+                 try {
+                     if (!dispatched.response.ok) {
+                         const snippet = await readErrorSnippet(dispatched.response);
++                        if (plan.model === "dsh-collaborative-v1") {
++                            const receipt = snippet.match(/run=[0-9a-f-]{36} stage=(?:A|B|review|fact-check|pipeline)\b/)?.[0];
++                            if (receipt) work.onCollaborativeFailure?.(receipt);
++                        }
+                         // Mask only for the log line: the verdict below needs the raw body markers.
+                         loggerLog("warn", `[external-summary] candidate ${plan.model} attempt ${attempt}/${SUMMARY_MAX_ATTEMPTS} rejected: HTTP ${dispatched.response.status} (${diagnostics()}) from ${host}${snippet ? ` — ${maskUrlsInText(snippet)}` : ""}`);
+                         if (attempt < SUMMARY_MAX_ATTEMPTS && !signal.aborted && isTransientUpstreamError(dispatched.response.status, snippet)) {
 diff --git a/src/external-summary-runtime.ts b/src/external-summary-runtime.ts
 index 56b565b..2347929 100644
 --- a/src/external-summary-runtime.ts
@@ -355,6 +400,16 @@ index 4e02788..d423960 100644
          const message = error instanceof Error ? error.message : String(error);
          if (!seenExpansionWarnings.has(message)) {
              seenExpansionWarnings.add(message);
+diff --git a/src/external-summary.ts b/src/external-summary.ts
+index 622eceb..9c76909 100644
+--- a/src/external-summary.ts
++++ b/src/external-summary.ts
+@@ -1,4 +1,5 @@
+ export interface SummaryWork {
++    onCollaborativeFailure?: (receipt: string) => void;
+     readonly content: string;
+     readonly instructions: string;
+     readonly reference?: string;
 diff --git a/src/preflight.ts b/src/preflight.ts
 index 0af1155..1fe85b8 100644
 --- a/src/preflight.ts
@@ -582,11 +637,11 @@ index 6fc46fc..57e0c30 100644
      // replacement or compression handler (#2324).
 diff --git a/tests/collaborative-transaction.test.ts b/tests/collaborative-transaction.test.ts
 new file mode 100644
-index 0000000..e4546cd
+index 0000000..9df8150
 --- /dev/null
 +++ b/tests/collaborative-transaction.test.ts
-@@ -0,0 +1,182 @@
-+import { getStore } from "../src/persist.ts";
+@@ -0,0 +1,203 @@
++import { getStore, SessionStore } from "../src/persist.ts";
 +import fs from 'node:fs';
 +import os from 'node:os';
 +import path from 'node:path';
@@ -595,7 +650,7 @@ index 0000000..e4546cd
 +import http from "node:http";
 +import { once } from "node:events";
 +import { createCore, defaultConfig, defaultPrompts, type CoreMessage } from "acp-kernel";
-+import { createSession, markDirty, LazyBlockContents, compressionDraftSessions } from "../src/session.ts";
++import { createSession, markDirty, isDroppedMetadata, LazyBlockContents, compressionDraftSessions } from "../src/session.ts";
 +import { collaborativeEnabled, compressionDraft } from "../src/collaborative-transaction.ts";
 +import { applyConfiguredCompression } from "../src/external-summary-compress.ts";
 +import { deferredCandidatesCovered, preflightCompress } from "../src/preflight.ts";
@@ -610,7 +665,7 @@ index 0000000..e4546cd
 +    let n = 0;
 +    const server = http.createServer((req, res) => { let body="";req.on("data",chunk=>body+=chunk);req.on("end", () => {
 +        if (req.url === "/v1/plan") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify(planning?planning(JSON.parse(body)):{decision:"legacy",ranges:[],reason:"fixture"})); return; }
-+        if (!reply(++n)) { res.writeHead(401); res.end("unavailable"); return; }
++        if (!reply(++n)) { res.writeHead(401); res.end(JSON.stringify({error:"run=12345678-1234-1234-1234-123456789012 stage=fact-check"})); return; }
 +        res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ choices: [{ message: { content: SUMMARY }, finish_reason: "stop" }] }));
 +    }); });
 +    server.listen(0, "127.0.0.1"); await once(server, "listening");
@@ -629,7 +684,7 @@ index 0000000..e4546cd
 +function args(ctx: ReturnType<typeof context>) { return { content: ["a", "b"].map(id => ({ startId: ctx.session.state.messageRefs.byRaw[id], endId: ctx.session.state.messageRefs.byRaw[id] })) }; }
 +test("collaborative gate does not affect ordinary external summaries", () => { assert.equal(collaborativeEnabled({}), false); assert.equal(collaborativeEnabled({ externalSummary: { enabled: false, targets: [{ model: "dsh-collaborative-v1" }] } }), false); });
 +test("two successful ranges commit together and exact originals remain recoverable", async () => { await fixture(async ctx => { const result = await applyConfiguredCompression(args(ctx), ctx); assert.equal(result.outcome, "applied", result.text); assert.equal(ctx.session.state.blocks.length, 2); for (const block of ctx.session.state.blocks) assert.ok(ctx.session.blockContents.get(block.blockId)?.full.text.includes(RAW), resolveDecompress({ blockId: block.blockId, full: true }, ctx).text); assert.ok(ctx.messages.find(x => x.id === "latest")); }); });
-+test("one successful and one failed range leave entire live state unchanged", async () => { await fixture(async ctx => { const before = JSON.stringify(ctx.session.state), stats = JSON.stringify(ctx.session.stats); const result = await applyConfiguredCompression(args(ctx), ctx); assert.equal(result.outcome, "refused"); assert.equal(JSON.stringify(ctx.session.state), before); assert.equal(JSON.stringify(ctx.session.stats), stats); assert.equal(ctx.session.blockContents.size, 0); }, n => n === 1); });
++test("one successful and one failed range leave entire live state unchanged", async () => { await fixture(async ctx => { const before = JSON.stringify(ctx.session.state), stats = JSON.stringify(ctx.session.stats); const result = await applyConfiguredCompression(args(ctx), ctx); assert.match(result.text,/run=12345678-1234-1234-1234-123456789012 stage=fact-check/); assert.equal(result.outcome, "refused"); assert.equal(JSON.stringify(ctx.session.state), before); assert.equal(JSON.stringify(ctx.session.stats), stats); assert.equal(ctx.session.blockContents.size, 0); }, n => n === 1); });
 +test("source mutation prevents draft commit and preserves new messages", () => { const ctx = context("http://localhost:1"); const t = compressionDraft(ctx.session); t.draft.state.blocks.length = 0; ctx.session.lastMessages = [...ctx.messages, { id: "new", role: "user", contentType: "text", text: "New requirement" }]; markDirty(ctx.session); assert.throws(() => t.commit(), /changed/); assert.equal(ctx.session.lastMessages.at(-1)?.id, "new"); });
 +test("preflight failure leaves original history untouched", async () => { await fixture(async ctx => { ctx.config.modelContextLimit = 1500; const before = JSON.stringify(ctx.session.state); const result = await preflightCompress({ core: ctx.core, config: ctx.config, session: ctx.session, prompts: defaultPrompts, protocol: "openai", model: "unused", url: "http://127.0.0.1:1", headers: {}, log: () => {} }, ctx.messages); assert.equal(result.compressedRanges, 0); assert.equal(JSON.stringify(ctx.session.state), before); }, () => false); });
 +
@@ -768,6 +823,27 @@ index 0000000..e4546cd
 + },()=>true,()=>{plans++;return {decision:'wait',ranges:[],reason:'still working'};});
 +});
 +
++
++test("compression after idle persistence preserves the metadata proxy and nested disk values", async () => {
++    await fixture(async ctx => {
++        const store = new SessionStore({dir:process.env.BILI_SESSIONS_DIR!, debounceMs:60000, enabled:true});
++        try {
++            ctx.session.metadata.audit = { nested: [{ label:"old" }, null, 42] };
++            await store.writeNow(ctx.session);
++            const proxy = ctx.session.metadata;
++            assert.ok(isDroppedMetadata(proxy));
++            const result = await applyConfiguredCompression(args(ctx), ctx);
++            assert.equal(result.outcome, "applied", result.text);
++            assert.equal(ctx.session.metadata, proxy);
++            const edit = compressionDraft(ctx.session);
++            (edit.draft.metadata.audit as {nested:unknown[]}).nested[0] = "edited";
++            assert.deepEqual(proxy.audit,{nested:[{label:"old"},null,42]});
++            edit.commit();
++            assert.equal(ctx.session.metadata, proxy);
++            assert.deepEqual(proxy.audit,{nested:["edited",null,42]});
++        } finally { store.cancelAll(); }
++    });
++});
 diff --git a/tests/dsh-native.test.ts b/tests/dsh-native.test.ts
 index d1c76b4..3d8150b 100644
 --- a/tests/dsh-native.test.ts
@@ -809,3 +885,16 @@ index d1c76b4..3d8150b 100644
 +  assert.equal(calls[0].tool,'compress');assert.deepEqual(calls[0].args,{content:[{startId:'m00001',endId:'m00009'}]});
 + });}finally{proxy.close();_resetRegisterForTest(undefined);rmrf(home);}
 +});
+diff --git a/tsup.config.ts b/tsup.config.ts
+index f77884f..fcd0b67 100644
+--- a/tsup.config.ts
++++ b/tsup.config.ts
+@@ -4,7 +4,7 @@ import { defineConfig } from "tsup";
+ 
+ export default [
+ defineConfig({
+-    entry: ["src/index.ts", "src/mcp.ts", "src/claude-mcp-entry.ts", "src/claude-native-bootstrap.ts", "src/agent/pi.ts", "src/agent/pi-native.ts", "src/agent/omp.ts", "src/agent/omp-native.ts", "src/agent/opencode.ts", "src/agent/opencode-native.ts", "src/agent/dsh-acp.ts", "src/agent/dsh-native.ts", "src/agent/dsh-compaction-gate.ts", "src/kimi/native-mcp.ts", "src/kimi/bootstrap-hook.ts", "src/zcode/mcp-entry.ts", "src/zcode/bootstrap-hook.ts"],
++    entry: ["src/external-summary-settings.ts", "src/index.ts", "src/mcp.ts", "src/claude-mcp-entry.ts", "src/claude-native-bootstrap.ts", "src/agent/pi.ts", "src/agent/pi-native.ts", "src/agent/omp.ts", "src/agent/omp-native.ts", "src/agent/opencode.ts", "src/agent/opencode-native.ts", "src/agent/dsh-acp.ts", "src/agent/dsh-native.ts", "src/agent/dsh-compaction-gate.ts", "src/kimi/native-mcp.ts", "src/kimi/bootstrap-hook.ts", "src/zcode/mcp-entry.ts", "src/zcode/bootstrap-hook.ts"],
+     format: ["esm"],
+     target: "node20",
+     platform: "node",

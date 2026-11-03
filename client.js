@@ -154,7 +154,7 @@ const CSS=`
 @media (prefers-reduced-motion:reduce){.dcc *{transition:none!important}}
 `;
 
-const NUM={timeoutMs:[1000,580000,'ms'],plannerTimeoutMs:[1000,120000,'ms'],retries:[0,3,'次'],maxSummaryChars:[100,100000,'字'],verificationMaxFacts:[1,100,'条'],preserveRecentTokens:[1000,100000,'token'],autoFoldTargetTokens:[2000,900000,'token'],outputTokens:[256,128000,'token'],plannerOutputTokens:[256,128000,'token'],claudeOutputTokens:[256,128000,'token'],reviewOutputTokens:[256,128000,'token'],verificationOutputTokens:[256,128000,'token'],claudeContextTokens:[4096,2000000,'token'],reviewContextTokens:[4096,2000000,'token']};
+const NUM={timeoutMs:[1000,580000,'ms'],plannerTimeoutMs:[1000,120000,'ms'],retries:[0,3,'次'],maxSummaryChars:[100,100000,'字'],verificationMaxFacts:[1,100,'条'],preserveRecentTokens:[1000,100000,'token'],autoFoldTargetTokens:[8192,10000000,'token'],outputTokens:[256,128000,'token'],plannerOutputTokens:[256,128000,'token'],claudeOutputTokens:[256,128000,'token'],reviewOutputTokens:[256,128000,'token'],verificationOutputTokens:[256,128000,'token'],claudeContextTokens:[4096,2000000,'token'],reviewContextTokens:[4096,2000000,'token']};
 const SELECT={verificationProvider:[['claude','Claude'],['openai','OpenAI 兼容接口']],reasoningEffort:[['none','不推理'],['low','低'],['medium','中'],['high','高'],['xhigh','很高'],['max','最高']]};
 const MODEL=['aProvider','aModel','claudeModel','reviewModel','plannerModel','verificationModel'];
 const ENV=['claudeKeyEnv','reviewKeyEnv'],URLS=['claudeBase','reviewBase'];
@@ -169,7 +169,7 @@ const GROUPS=[
  {id:'budget',title:'时间与篇幅',sub:'超时或超出篇幅时整批放弃，会话原文保持不变。',fields:[
   ['timeoutMs','整次处理超时'],['plannerTimeoutMs','规划超时'],
   ['maxSummaryChars','每段摘要字数上限'],['verificationMaxFacts','核验引用的关键事实'],
-  ['preserveRecentTokens','不压缩的最近历史'],['autoFoldTargetTokens','自动折叠目标','只在关闭模型规划时使用'],
+  ['preserveRecentTokens','不压缩的最近历史'],['autoFoldTargetTokens','自动折叠目标','范围 8192–10000000；启用模型规划时也须有效'],
   ['retries','网络失败重试']]},
  {id:'output',title:'输出上限',sub:'各阶段单次回复最多生成的 token，推理 token 也算在内。',fields:[
   ['outputTokens','A 摘要'],['claudeOutputTokens','B 摘要'],['reviewOutputTokens','交叉审核'],

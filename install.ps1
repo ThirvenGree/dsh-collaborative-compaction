@@ -34,6 +34,7 @@ if(Test-Path -LiteralPath $journalPath){
 }
 if($Rollback){Write-Output 'No incomplete installation';return}
 if(!(Test-Path -LiteralPath (Join-Path $plugin 'node_modules/js-tiktoken'))){throw 'Run npm ci --ignore-scripts in the plugin directory first'}
+if(!(Test-Path -LiteralPath (Join-Path $repo 'dist/external-summary-settings.js'))){throw 'Rebuild the patched engine: the settings validator is missing'}
 if(!(Test-Path -LiteralPath $manifestPath)){throw 'DSH profile not found'}
 if(!(Test-Path -LiteralPath (Join-Path $repo 'dist/index.js'))){throw 'Run prepare-engine.ps1 first'}
 $source=Join-Path $repo 'src/collaborative-transaction.ts'
