@@ -10,7 +10,9 @@
 - [Node Worker 文档](https://nodejs.org/docs/latest-v22.x/api/worker_threads.html)：SQLite 查询、脱敏文本准备和索引构建放到工作线程，避免在宿主线程扫描整段历史。
 - [SQLite WAL 并发边界](https://sqlite.org/wal.html#walresetbug)：固定 Node 所带的 SQLite 版本也要纳入并发设计。搜索线程只读正式历史库；独立可重建的搜索库使用回滚日志，不额外给正式库增加后台写入和检查点线程。
 
-## 数据与权限
+## 数据与检索范围
+
+这里的“按会话隔离”指一次查询及证据引用只属于选定目标，不表示限制哪些调用者可以选择该目标。当前生产工具没有调用会话到目标会话的访问白名单；已知的准确引擎 ID 或唯一标准 ID 可以定位同一引擎存储中的可检索完整原文。实际存储目录决定数据范围，DSH profile 名称本身不隔离共用的存储。
 
 索引文件位于原 index.db 旁，文件名为 `index.db.search.sqlite`。它只保存搜索所需、经凭据遮蔽的文本及来源字段，不是正式记忆库，也不会上传 GitHub。推理内容、system 消息和图片二进制不进入搜索文档。原始 CAS 内容不改写。
 
