@@ -5086,10 +5086,10 @@ index 00000000..d2cb2113
 +});
 diff --git a/tests/search-index-resume.test.ts b/tests/search-index-resume.test.ts
 new file mode 100644
-index 00000000..c4e04975
+index 00000000..599c1fe8
 --- /dev/null
 +++ b/tests/search-index-resume.test.ts
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,218 @@
 +import test from "node:test";
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
@@ -5108,6 +5108,8 @@ index 00000000..c4e04975
 +function fixture(t: { after: (fn: () => Promise<void>) => void }) {
 +    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bili-search-resume-")), file = path.join(dir, "source.sqlite");
 +    const owner = UnifiedStore.open(file), db = (owner as unknown as { db: SqliteDatabase }).db;
++    // A complete persisted transcript must belong to a real source session.
++    db.prepare("INSERT INTO sessions(session_id,created_at,updated_at) VALUES('history',1,1)").run();
 +    new SearchIndexJournal(db).ensure();
 +    t.after(async () => { await owner.closeSearchIndex(); owner.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 +    const put = (seq: number, text: string, sharedHash?: string) => {
