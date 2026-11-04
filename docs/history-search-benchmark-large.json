@@ -1,0 +1,355 @@
+{
+  "schema": "history-fts-benchmark-v1",
+  "generatedAt": "2026-11-04T03:08:44.344Z",
+  "syntheticOnly": true,
+  "environment": {
+    "node": "v22.22.2",
+    "platform": "win32",
+    "osRelease": "10.0.26200",
+    "cpu": "AMD Ryzen 7 5800H with Radeon Graphics         ",
+    "sqlite": {
+      "version": "3.51.2"
+    }
+  },
+  "corpus": {
+    "rows": 20000,
+    "sourceCharacters": 17684708,
+    "sourceBytes": 35824620,
+    "sourceDatabaseBytes": 51843072,
+    "generationMs": 2562.11
+  },
+  "oldCold": {
+    "elapsedMs": 1124.14,
+    "heartbeatTicks": 2,
+    "maxHeartbeatGapMs": 1125.08
+  },
+  "newCold": {
+    "elapsedMs": 36492.47,
+    "heartbeatTicks": 2350,
+    "maxHeartbeatGapMs": 52.25,
+    "stats": {
+      "indexed": 20000,
+      "loaded": 3,
+      "matched": 1,
+      "elapsedMs": 36052.4525
+    }
+  },
+  "hot": {
+    "baseline": {
+      "samples": 30,
+      "p50Ms": 1084.28,
+      "p95Ms": 1368.6,
+      "maxMs": 1435.57
+    },
+    "indexed": {
+      "samples": 30,
+      "p50Ms": 13.14,
+      "p95Ms": 192.26,
+      "maxMs": 198.38
+    },
+    "workerHeartbeat": {
+      "elapsedMs": 528.99,
+      "heartbeatTicks": 37,
+      "maxHeartbeatGapMs": 20.38
+    }
+  },
+  "activeFullHistory": {
+    "rows": 20000,
+    "firstOverlay": {
+      "elapsedMs": 1414.38,
+      "heartbeatTicks": 87,
+      "maxHeartbeatGapMs": 98.41
+    },
+    "baseline": {
+      "samples": 20,
+      "p50Ms": 1180.53,
+      "p95Ms": 1262.52,
+      "maxMs": 1367.05
+    },
+    "indexed": {
+      "samples": 20,
+      "p50Ms": 71.9,
+      "p95Ms": 242.31,
+      "maxMs": 269.03
+    },
+    "workerHeartbeat": {
+      "elapsedMs": 992.78,
+      "heartbeatTicks": 38,
+      "maxHeartbeatGapMs": 76.83
+    },
+    "transportBefore": {
+      "overlayRows": 0,
+      "overlayChars": 0,
+      "summaryRows": 0,
+      "archiveRows": 0,
+      "residentSessions": 1,
+      "residentEstimatedBytes": 0,
+      "transferBudgetBytes": 67108864
+    },
+    "transportAfterFirst": {
+      "overlayRows": 20000,
+      "overlayChars": 17684708,
+      "summaryRows": 0,
+      "archiveRows": 0,
+      "residentSessions": 1,
+      "residentEstimatedBytes": 41387204,
+      "transferBudgetBytes": 67108864
+    },
+    "transportAfterWarm": {
+      "overlayRows": 20000,
+      "overlayChars": 17684708,
+      "summaryRows": 0,
+      "archiveRows": 0,
+      "residentSessions": 1,
+      "residentEstimatedBytes": 41387204,
+      "transferBudgetBytes": 67108864
+    },
+    "sameObjectEditFound": true,
+    "unpersistedAppendFound": true,
+    "canonicalEditOverridesUnchangedResident": true,
+    "canonicalDeleteOverridesUnchangedResident": true
+  },
+  "cases": [
+    {
+      "query": "岑舒",
+      "sourceId": "history-120",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 16.823100000001432
+      }
+    },
+    {
+      "query": "青枔",
+      "sourceId": "history-155",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 11.293399999995017
+      }
+    },
+    {
+      "query": "autoFoldTargetTokens",
+      "sourceId": "history-280",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 13.431700000001001
+      }
+    },
+    {
+      "query": "RecentTokens",
+      "sourceId": "history-290",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 11.140500000001339
+      }
+    },
+    {
+      "query": "90%",
+      "sourceId": "history-310",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 10.476600000001781
+      }
+    },
+    {
+      "query": "E:/workspace/config.json",
+      "sourceId": "history-350",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 11.106900000006135
+      }
+    },
+    {
+      "query": "2026-11-04",
+      "sourceId": "history-390",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 11.444800000004761
+      }
+    },
+    {
+      "query": "延迟回忆",
+      "sourceId": "history-460",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 10.406500000004598
+      }
+    },
+    {
+      "query": "资料",
+      "sourceId": "history-20000",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 6,
+        "matched": 5,
+        "elapsedMs": 181.83329999999842
+      }
+    },
+    {
+      "query": "整理 页码",
+      "sourceId": "history-20000",
+      "baselineFound": true,
+      "indexedFound": true,
+      "indexStats": {
+        "indexed": 0,
+        "loaded": 6,
+        "matched": 5,
+        "elapsedMs": 197.57830000000104
+      }
+    }
+  ],
+  "incremental": [
+    {
+      "mutation": "append",
+      "sourceId": "history-20001",
+      "elapsedMs": 31.59,
+      "stats": {
+        "indexed": 1,
+        "loaded": 2,
+        "matched": 1,
+        "elapsedMs": 20.43869999999879
+      }
+    },
+    {
+      "mutation": "append",
+      "sourceId": "history-20002",
+      "elapsedMs": 12.77,
+      "stats": {
+        "indexed": 1,
+        "loaded": 2,
+        "matched": 1,
+        "elapsedMs": 7.26249999999709
+      }
+    },
+    {
+      "mutation": "append",
+      "sourceId": "history-20003",
+      "elapsedMs": 12.72,
+      "stats": {
+        "indexed": 1,
+        "loaded": 2,
+        "matched": 1,
+        "elapsedMs": 7.182100000005448
+      }
+    },
+    {
+      "mutation": "append",
+      "sourceId": "history-20004",
+      "elapsedMs": 10.98,
+      "stats": {
+        "indexed": 1,
+        "loaded": 2,
+        "matched": 1,
+        "elapsedMs": 6.110100000005332
+      }
+    },
+    {
+      "mutation": "append",
+      "sourceId": "history-20005",
+      "elapsedMs": 12.78,
+      "stats": {
+        "indexed": 1,
+        "loaded": 2,
+        "matched": 1,
+        "elapsedMs": 7.626900000002934
+      }
+    },
+    {
+      "mutation": "same-length external edit",
+      "correct": true,
+      "stats": {
+        "indexed": 1,
+        "loaded": 3,
+        "matched": 1,
+        "elapsedMs": 14.35339999999269
+      }
+    },
+    {
+      "mutation": "external delete",
+      "correct": true,
+      "stats": {
+        "indexed": 1,
+        "loaded": 0,
+        "matched": 0,
+        "elapsedMs": 5.447999999989406
+      }
+    },
+    {
+      "mutation": "retirement",
+      "correct": true,
+      "stats": {
+        "indexed": 1,
+        "loaded": 0,
+        "matched": 0,
+        "elapsedMs": 4.997900000002119
+      }
+    }
+  ],
+  "recent": {
+    "unpersistedMessageFound": true,
+    "query": "pixelBudget",
+    "stats": {
+      "indexed": 0,
+      "loaded": 2,
+      "matched": 1,
+      "elapsedMs": 11.879400000005262
+    }
+  },
+  "overlay": {
+    "newerSameIdOverridesStored": true
+  },
+  "open": {
+    "originalReadHandleWorks": true,
+    "stats": {
+      "indexed": 0,
+      "loaded": 3,
+      "matched": 1,
+      "elapsedMs": 105.17319999999017
+    }
+  },
+  "storage": {
+    "source": 51892224,
+    "sourceWal": 0,
+    "index": 145588224,
+    "indexWal": 0
+  },
+  "indexGrowthBytes": 145588224,
+  "limitations": [
+    "Synthetic, single-machine wall-clock measurements; not a guaranteed speedup on every workload.",
+    "Cold indexed search includes initial index construction; no remote model calls or formal memories were used.",
+    "Legacy cache may not retain a corpus larger than its per-item capacity; the comparison exercises its actual current behavior."
+  ]
+}

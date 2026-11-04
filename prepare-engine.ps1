@@ -19,7 +19,7 @@ try {
     CheckExit
     npm.cmd run build
     CheckExit
-    node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts tests/search-original-evidence.test.ts tests/search-context-cross-session.test.ts tests/ccr-plugin.test.ts
+    node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts tests/search-original-evidence.test.ts tests/search-evidence-cache.test.ts tests/search-context-cross-session.test.ts tests/search-plan-aware.test.ts tests/search-index.test.ts tests/search-index-integration.test.ts tests/search-index-dist.test.ts tests/check-dist-external.test.ts tests/search-fts-acceptance.test.ts tests/ccr-plugin.test.ts
     CheckExit
 } finally { Pop-Location }
 Write-Output "Patched engine ready: $Destination"

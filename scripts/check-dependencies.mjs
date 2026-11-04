@@ -35,7 +35,12 @@ export function checkDependencies(directory,{sqlite=false}={}){
   const require=createRequire(pathToFileURL(path.join(root,'package.json')));
   const {DatabaseSync}=require('node:sqlite');
   const database=new DatabaseSync(':memory:');
-  try{assert.equal(database.prepare('SELECT 1 AS ok').get().ok,1);}finally{database.close();}
+  try{
+   assert.equal(database.prepare('SELECT 1 AS ok').get().ok,1);
+   database.exec("CREATE VIRTUAL TABLE fts_probe USING fts5(body, tokenize='trigram');");
+   database.prepare('INSERT INTO fts_probe(body) VALUES(?)').run('中文检索 autoFoldTargetTokens=80000');
+   assert.equal(database.prepare('SELECT count(*) AS n FROM fts_probe WHERE fts_probe MATCH ?').get('"中文检索"').n,1,'SQLite must provide FTS5 trigram');
+  }finally{database.close();}
  }
  return {package:manifest.name,version:manifest.version,node:process.version,dependencies:checked,sqlite:sqlite?'node:sqlite':'not required'};
 }

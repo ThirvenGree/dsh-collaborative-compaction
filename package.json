@@ -1,6 +1,6 @@
 {
   "name": "dsh-collaborative-compaction",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "packageManager": "npm@10.9.7",
   "main": "host.js",
@@ -56,6 +56,7 @@
     "client.js",
     "cordis.patch.yml",
     "README.md",
+    "docs",
     "LICENSE",
     "patches",
     "install.ps1",

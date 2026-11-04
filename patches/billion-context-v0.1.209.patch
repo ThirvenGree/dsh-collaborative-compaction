@@ -52,7 +52,7 @@ index be73344faa298f8fc54b7ce4f90c384ff3e164d7..ed900c2e426bc6124d685833b8bf0bed
    acp_status: {
      description:
 diff --git a/reference/architecture.md b/reference/architecture.md
-index acbbd537c12c19fcb8b8373710824136f85c0fdc..edc4784ca3b463a2d4b872edc038ce7e4fb85825 100644
+index acbbd537c12c19fcb8b8373710824136f85c0fdc..3d42c0b143032bbdac9f4e94f9bd2a48a73daea8 100644
 --- a/reference/architecture.md
 +++ b/reference/architecture.md
 @@ -9,6 +9,7 @@
@@ -63,7 +63,23 @@ index acbbd537c12c19fcb8b8373710824136f85c0fdc..edc4784ca3b463a2d4b872edc038ce7e
  │   ├── cli.ts                    # CLI dispatcher: start/update/export/test/plugin + client launcher
  │   ├── server.ts                 # HTTP proxy server, request pipeline (hot file — §7.2)
  │   ├── server/                   # Server-side support modules
-@@ -218,3 +219,7 @@ When navigating this codebase, these are the load-bearing entry points:
+@@ -73,6 +74,15 @@ billion-context/
+ │   ├── compress-settings.ts      # Three-level compress config merge (global→provider→model)
+ │   ├── compress-tool.ts          # ACP tool surface — thin re-export from acp-kernel
+ │   ├── decompress-shared.ts      # Shared decompress logic + large-decompress tmp retention cap
++│   ├── search-evidence.ts        # Indexed original-evidence search, live overlays and versioned read handles
++│   ├── search-cache.ts           # Compatibility scan cache and evidence invalidation
++│   ├── search-text.ts            # Shared credential-safe searchable text preparation
++│   ├── storage/                 # Canonical SQLite/CAS storage and derived search index
++│   │   ├── search-index-journal.ts # Transactional source change markers; never rewrites original content
++│   │   ├── search-index-client.ts # Worker lifecycle, source/built entry resolution and bounded requests
++│   │   ├── search-index-worker.ts # Dedicated search worker entry, packaged by tsup
++│   │   ├── search-index-engine.ts # Read-only source snapshots plus rebuildable trigram/short-gram FTS index
++│   │   └── search-index-types.ts # Search request/result protocol and source provenance
+ │   ├── fold-reconcile.ts         # Fold-anchor reconciliation for stable prefix cache
+ │   ├── generation-boundary.ts    # Standing generation-boundary note for post-switch stale-ref residue (#4305)
+ │   ├── orphan-gc.ts              # Orphan block garbage collection
+@@ -218,3 +228,7 @@ When navigating this codebase, these are the load-bearing entry points:
  - **E2E regression** — `tests/e2e/` contains real-client suites (codex, opencode, pi, dsh) plus hermetic lanes (registry, advisory-rollback, release-canary, opencode WS, image billing); each carries its own skip gate — read the test header for the exact env var.
  - **Compression kernel** — `kernel/` (in-repo acp-kernel, #2092). Human-gated boundary; see `AGENTS.md` "Kernel Boundary".
  - **Pi sub-agent surface** — `pi-subagents/` (in-repo billion-context-pi-subagents, #2384); wired into the pi lane by `src/agent/pi-subagents.ts`. Lighter-gated boundary than the kernel; see `AGENTS.md` "Pi-Subagents Boundary".
@@ -71,6 +87,40 @@ index acbbd537c12c19fcb8b8373710824136f85c0fdc..edc4784ca3b463a2d4b872edc038ce7e
 +- `src/collaborative-planner.ts`: authenticated local model planning; validates suggested ranges before engine preview.
 +
 +- `src/collaborative-background.ts`: staged soft-pressure review; safe-boundary replay on the current session.
+diff --git a/scripts/check-dist-external.mjs b/scripts/check-dist-external.mjs
+index fd71a561273ae1000cd614946c4cabbeb1336c5d..ace366a74b2c2a667033674482db0659d2058af9 100644
+--- a/scripts/check-dist-external.mjs
++++ b/scripts/check-dist-external.mjs
+@@ -28,7 +28,7 @@
+ // src/agent/opencode-native.ts). A literal `import("zod")` is NOT sanctioned
+ // (esbuild would bundle or rewrite it) and fails via the allowlist.
+ 
+-import { builtinModules } from "node:module";
++import { builtinModules, isBuiltin } from "node:module";
+ import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+ import path from "node:path";
+ import process from "node:process";
+@@ -97,7 +97,7 @@ function collectRefs(text, re, kind) {
+         const spec = m[1];
+         if (!spec || spec.startsWith(".") || spec.startsWith("/")) continue;
+         const base = spec.replace(/^node:/, "").split("/")[0];
+-        if (NODE_BUILTINS.has(base)) continue;
++        if (isBuiltin(spec) || NODE_BUILTINS.has(base)) continue;
+         refs.push({ spec, kind, line: lineOf(text, m.index) });
+     }
+     return refs;
+diff --git a/scripts/live-files.mjs b/scripts/live-files.mjs
+index 315ddf7172ec4d734ac697aa0d965e144e664fb9..8e27295179e578259f7a272a8bd0b243fa817857 100644
+--- a/scripts/live-files.mjs
++++ b/scripts/live-files.mjs
+@@ -73,6 +73,7 @@ export const LIVE_FILES = [
+     // in-memory-only value, so no zone band is needed — the entry is for the
+     // tripwire
+     "tests/issue4982-draining-twin-ladder.test.ts",
++    "tests/search-index-dist.test.ts",
+ ];
+ 
+ /** Band width per live file: the zone ladder drifts +1 per EADDRINUSE retry;
 diff --git a/src/agent/dsh-native.ts b/src/agent/dsh-native.ts
 index 779ec5ff994ceae6d80e5be5ffc06c13c405643a..c049d6ebe1a733a000c09510e9e64a177aa7917a 100644
 --- a/src/agent/dsh-native.ts
@@ -447,7 +497,7 @@ index 0000000000000000000000000000000000000000..5713b5f74f919fe49648820caea702ca
 +    await backgroundFoldCancellations.get(session)?.();
 +}
 diff --git a/src/decompress-shared.ts b/src/decompress-shared.ts
-index 105d21956f83ee74907f5011cc9665e5a98b5541..d8d38b502df05919ff768083c062e986812c0746 100644
+index 105d21956f83ee74907f5011cc9665e5a98b5541..96883bd0a850c6af704174e6dcefee3b5391b142 100644
 --- a/src/decompress-shared.ts
 +++ b/src/decompress-shared.ts
 @@ -18,7 +18,8 @@ import { dirname, join, resolve as resolvePath } from "node:path";
@@ -455,8 +505,8 @@ index 105d21956f83ee74907f5011cc9665e5a98b5541..d8d38b502df05919ff768083c062e986
  import { fileURLToPath } from "node:url";
  import { markDirty, preCompactionArchiveOf, peekSession, findSessionByCanonicalId, type Session } from "./session.js";
 -import { getStore } from "./persist.js";
-+import { getStore, peekSearchableTranscript } from "./persist.js";
-+import { searchEvidence } from "./search-evidence.js";
++import { getStore, peekSearchableTranscript, peekIndexedSearch } from "./persist.js";
++import { searchEvidence, searchEvidenceIndexed, type EvidenceIndexQuery } from "./search-evidence.js";
  import { ccrEnabled, contentStoreOf } from "./store.js";
  import { safePrefix } from "./text-safe.js";
  import { decompressTmpCap as knobDecompressTmpCap } from "./knobs.js";
@@ -484,7 +534,7 @@ index 105d21956f83ee74907f5011cc9665e5a98b5541..d8d38b502df05919ff768083c062e986
          // #1333: a derived session (pi RLM child) has no blocks of its own —
          // fall back to the recorded parent chain (read-only) instead of a
          // bare "nothing to search".
-@@ -886,7 +901,7 @@ export function executeSearchContextTarget(
+@@ -886,8 +901,53 @@ export function executeSearchContextTarget(
      // A self-reference under an alias form (canonical pfa-* id) keeps plain
      // current-session semantics — no "historical session" framing.
      const self = peekSession(requested) ?? findSessionByCanonicalId(requested);
@@ -493,6 +543,52 @@ index 105d21956f83ee74907f5011cc9665e5a98b5541..d8d38b502df05919ff768083c062e986
      const foreign = resolveForeignSessionState(requested);
      if (!foreign) return toolFail(`[search_context FAILED: unknown session "${requested}"]`);
      return executeSearchContext(args, core, foreign, requested);
+ }
++
++/** Async production route: stored originals are queried in a worker-backed
++ * SQLite index. The synchronous route remains a compatibility/oracle surface. */
++export async function executeSearchContextTargetAsync(
++    args: Record<string, unknown>, core: CompressionCore, sessionId: string, state: CompressionState,
++    ctx?: { messages: CoreMessage[]; config: Config; session: Session; log: (msg: string) => void; searchIndex?: EvidenceIndexQuery },
++): Promise<ProxyToolResult> {
++    const requested = typeof args.conversation_id === "string" ? args.conversation_id.trim() : "";
++    const own = !requested || requested === sessionId || requested.toLowerCase() === "current";
++    const alias = !own ? peekSession(requested) ?? findSessionByCanonicalId(requested) : undefined;
++    // Foreign sessions retain the existing summary-only, read-only boundary.
++    if ((!own && alias?.id !== sessionId) || !ctx || ctx.session.id !== sessionId) {
++        return executeSearchContextTarget(args, core, sessionId, state);
++    }
++    const query = typeof args.query === "string" ? args.query.trim() : "";
++    if (!query || query.length > 1024) return toolFail("[search_context FAILED: query is required (1–1024 characters)]");
++    const limit = Number.isFinite(args.limit) && Number(args.limit) > 0 ? Math.min(12, Math.max(1, Math.floor(Number(args.limit)))) : 5;
++    const plan: SearchPlanOpts | undefined = effectiveSearchPlanAware(ctx.session)
++        ? { messages: ctx.messages, session: ctx.session, log: ctx.log, protectedPatterns: ctx.config.protectedLatestTools } : undefined;
++    const local = executeSearchContext({ ...args, query, limit }, core, state, undefined, plan);
++    let original: string;
++    try {
++        original = await searchEvidenceIndexed(ctx.session, query, limit, ctx.messages, ctx.searchIndex ?? peekIndexedSearch,
++            ccrEnabled(ctx.session) ? contentStoreOf(ctx.session) : undefined);
++    } catch {
++        ctx.log("[search_context] indexed original search unavailable; no full-history scan performed on host thread");
++        return toolFail("[search_context FAILED: historical evidence search is temporarily unavailable. No complete search was performed; retry later.]");
++    }
++    if (ctx.session.id !== sessionId) return toolFail("[search_context FAILED: session identity changed during search; retry in the current session.]");
++    if (original.startsWith("[Historical evidence search is temporarily unavailable")) return toolFail(original);
++    if (original) {
++        if (query.startsWith("open:") || local.text.startsWith("[No ")) return toolOk(original);
++        return toolOk(original + "\n\n" + safePrefix(local.text, 3500));
++    }
++    // Preserve inherited summary lookup without ever re-entering the synchronous
++    // own-session original reader after an empty index result.
++    if (local.text.startsWith("[No compressed blocks exist yet") || local.text.startsWith('[No blocks matched "')) {
++        const self = peekSession(sessionId);
++        if (self) for (const anc of derivedAncestorSessions(self)) {
++            if (core.search(query, anc.state).length) return executeSearchContext(args, core, anc.state, anc.id);
++        }
++        return toolOk(`[No current-session historical evidence matched "${query}". A missing record is not evidence it never happened.]`);
++    }
++    return local;
++}
 diff --git a/src/external-summary-compress.ts b/src/external-summary-compress.ts
 index 24c0d217e1309de8fbabdbadfbcdcb36f3f2362a..74f0aa3349cf105737a1b2567c13ceb6f4b4dec8 100644
 --- a/src/external-summary-compress.ts
@@ -767,9 +863,18 @@ index 622eceb4e5c8ad28f63bc5095be846b7cebb20ff..7447c5fecc0a47be763a2cc0e5338b2d
      readonly instructions: string;
      readonly reference?: string;
 diff --git a/src/loop/core.ts b/src/loop/core.ts
-index c103051f2415d3a51aacf72cc46b354adb7c16f4..2a82b170cafbe59c88249c4294db8d67ea8a5cd1 100644
+index c103051f2415d3a51aacf72cc46b354adb7c16f4..d9e433bc65764e040c1ded78dcfdca456c31ee43 100644
 --- a/src/loop/core.ts
 +++ b/src/loop/core.ts
+@@ -30,7 +30,7 @@ import { applyImageRescalePass, executeReadOriginalImage } from "../image-rescal
+ import { recordThreadTail } from "../server/thread-tracking.js";
+ import { applyRanges } from "../stream.js";
+ import { applyConfiguredCompression } from "../external-summary-compress.js";
+-import { executeSearchContextTarget, resolveDecompress } from "../decompress-shared.js";
++import { executeSearchContextTarget, executeSearchContextTargetAsync, resolveDecompress } from "../decompress-shared.js";
+ import { toolFail, type ProxyToolResult } from "../proxy-tool-result.js";
+ import { fetchWithRetry, UpstreamHttpError } from "../fetch-util.js";
+ import { noteUpstreamThrottle429, noteUpstreamThrottleResolved } from "../upstream-throttle.js";
 @@ -182,6 +182,7 @@ function activeAbsorbToolName(session: Session, config: Config): string | undefi
  const MALFORMED_PROXY_TOOL_ARGS_REPLAY = '{"_bili":"model produced non-JSON tool-call arguments; replaced with this valid placeholder so the continuation request stays parseable — see the tool result"}';
  
@@ -778,14 +883,30 @@ index c103051f2415d3a51aacf72cc46b354adb7c16f4..2a82b170cafbe59c88249c4294db8d67
      core: CompressionCore;
      config: Config;
      messages: CoreMessage[];
+@@ -359,6 +360,7 @@ export async function executeProxyToolAsync(
+     // carries the image bytes; the loop attaches them as an ephemeral carrier
+     // message (see proxyResults below).
+     if (toolName === READ_ORIGINAL_IMAGE_TOOL_NAME) return executeReadOriginalImage(args, ctx.session, (lvl, msg) => ctx.log(`[${lvl}] ${msg}`));
++    if (toolName === "search_context") return executeSearchContextTargetAsync(args, ctx.core, ctx.session.id, ctx.session.state, ctx);
+     if (toolName !== "compress") return executeProxyTool(toolName, args, ctx, callId, rawArguments);
+     const input = typeof rawArguments === "string" && rawArguments.length > 0 ? rawArguments : args;
+     return applyConfiguredCompression(input, ctx, callId, signal);
 diff --git a/src/persist.ts b/src/persist.ts
-index 10be0e6c823ef4b29a0b094166f95bc047a201e8..a1d556e7c6a0be7ef09748c36b892bb157260480 100644
+index 10be0e6c823ef4b29a0b094166f95bc047a201e8..eb3564a087980d3f384cb6aadd17c80c95639905 100644
 --- a/src/persist.ts
 +++ b/src/persist.ts
-@@ -1893,6 +1893,11 @@ export class SessionStore {
+@@ -1893,6 +1893,19 @@ export class SessionStore {
       *  transcript (msgId/ref/refNum/contentHash included) in seq order.
       *  Null when the unified store is unavailable — the render lane must
       *  degrade to the legacy path, never guess. */
++    async indexedSearch(sessionId: string, query: string, limit: number, options?: import("./storage/search-index-types.js").SearchIndexOptions) {
++        if (!this.shadow || this.shadow.stats.disabled) {
++            const { queryTransientEvidence } = await import("./storage/search-index-client.js");
++            return queryTransientEvidence(sessionId, query, limit, options);
++        }
++        try { return await this.shadow.indexedSearch(sessionId, query, limit, options); } catch { return null; }
++    }
++
 +    searchableTranscript(sessionId: string) {
 +        if (!this.shadow || this.shadow.stats.disabled) return [];
 +        try { return this.shadow.searchableTranscript(sessionId); } catch { return []; }
@@ -794,10 +915,17 @@ index 10be0e6c823ef4b29a0b094166f95bc047a201e8..a1d556e7c6a0be7ef09748c36b892bb1
      unifiedTailViewRows(sessionId: string): import("./storage/store.js").MessageRow[] | null {
          if (!this.shadow || this.shadow.stats.disabled) return null;
          try {
-@@ -3322,6 +3327,10 @@ function peekStoreForStamp(): SessionStore | null {
+@@ -3322,6 +3335,17 @@ function peekStoreForStamp(): SessionStore | null {
   *  half-readable view. Rows are the raw client view caliber (#2627 — what a
   *  live model request would have re-sent), persisted on every save via the
   *  raw-tail ingest. */
++export async function peekIndexedSearch(sessionId: string, query: string, limit: number, options?: import("./storage/search-index-types.js").SearchIndexOptions) {
++    const store = peekStoreForStamp();
++    if (store) return store.indexedSearch(sessionId, query, limit, options);
++    const { queryTransientEvidence } = await import("./storage/search-index-client.js");
++    return queryTransientEvidence(sessionId, query, limit, options);
++}
++
 +export function peekSearchableTranscript(sessionId: string) {
 +    return peekStoreForStamp()?.searchableTranscript(sessionId) ?? [];
 +}
@@ -1069,26 +1197,23 @@ index 0000000000000000000000000000000000000000..b0d8d53c221fc1be72685dfeb33b1164
 +}
 diff --git a/src/search-evidence.ts b/src/search-evidence.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c384314fbb2d228bdb9876adc7e96d35266805ad
+index 0000000000000000000000000000000000000000..68798c22128aae56e259d94f1377c87954ba09d1
 --- /dev/null
 +++ b/src/search-evidence.ts
-@@ -0,0 +1,148 @@
-+import { createHash } from "node:crypto";
+@@ -0,0 +1,254 @@
 +import type { CoreMessage, MessageContentStore } from "acp-kernel";
++import { parseStoredPlaceholder } from "acp-kernel";
 +import type { BiliMessage } from "acp-kernel/wire";
 +import type { Session } from "./session.js";
 +import type { SearchTranscriptRow } from "./storage/store.js";
-+import { redactSecretsInText } from "./log-mask.js";
++import { cleanSearchText as clean, prepareSearchText } from "./search-text.js";
 +import { safePrefix } from "./text-safe.js";
 +import { SearchLru } from "./search-cache.js";
++import type { SearchIndexOptions, SearchIndexResult } from "./storage/search-index-types.js";
 +
 +const pageSize = 1600;
-+const hash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 24);
-+const clean = (s: string) => redactSecretsInText(s)
-+    .replace(/((?:令牌|密钥|口令|密码)[】"'\s:=：]*)([\w.+/=-]{8,})/giu, "$1<masked>")
-+    .replace(/(?:data:[\w.+/-]+;base64,)?[A-Za-z0-9+/=_-]{128,}/g, "<encoded bytes omitted>");
 +type PreparedText = { text: string; lower: string; evidence: string };
-+type Note = PreparedText & { key: string; label: string; ref?: string; block?: string; retrieve?: boolean; corrects?: string };
++type Note = PreparedText & { key: string; label: string; ref?: string; block?: string; retrieve?: boolean; corrects?: string; offset?: number; totalChars?: number; head?: string };
 +type Hit = { note: Note; score: number; at: number; order: number };
 +const preparedCache = new SearchLru<string, PreparedText & { source: string; attachment: string; sessionId: string }>();
 +const sessionKeys = new WeakMap<object, number>();
@@ -1102,9 +1227,8 @@ index 0000000000000000000000000000000000000000..c384314fbb2d228bdb9876adc7e96d35
 +        preparedHits++; return prior;
 +    }
 +    preparedMisses++;
-+    const text = clean([source, attachment ? "[attachment] " + attachment : ""].filter(Boolean).join("\n"));
-+    const result = { source, attachment, sessionId: session.id, text, lower: text.toLowerCase(), evidence: "ev-" + hash(session.id + "\0" + key + "\0" + text) };
-+    preparedCache.set(cacheKey, result, 256 + 2 * (source.length + attachment.length + session.id.length + text.length + result.lower.length));
++    const result = { source, attachment, sessionId: session.id, ...prepareSearchText(session.id, key, source, attachment) };
++    preparedCache.set(cacheKey, result, 256 + 2 * (source.length + attachment.length + session.id.length + result.text.length + result.lower.length));
 +    return result;
 +}
 +/** Local diagnostic counters contain no source content or session identifiers. */
@@ -1116,6 +1240,116 @@ index 0000000000000000000000000000000000000000..c384314fbb2d228bdb9876adc7e96d35
 +    return { id:m.id, role:m.role, contentType:m.contentType, text:m.text, toolName:m.toolName,
 +        sourceKind:raw.source?.kind, timestamp:raw.timestamp, corrects:raw.corrects,
 +        attachment:raw.attachment?.description || part?.description || part?.title || part?.filename || part?.alt || raw.imageMediaType };
++}
++
++export type EvidenceIndexQuery = (sessionId: string, query: string, limit: number, options?: SearchIndexOptions) => Promise<SearchIndexResult | null>;
++
++/** Production recall sends only the resident overlay and small block metadata to
++ * the worker. It never materializes the stored transcript on the host thread. */
++export async function searchEvidenceIndexed(session: Session, query: string, limit: number, view: CoreMessage[], queryIndex: EvidenceIndexQuery, store?: MessageContentStore, observe?: (id: string, text: string) => void): Promise<string> {
++    const scoped = /^block:(b\d+)\s+(.+)$/is.exec(query);
++    const target = scoped ? session.state.blocks.find(b => b.blockId === scoped[1]) : undefined;
++    if (scoped && !target) return "[Unknown original-evidence block in this session.]";
++    const overlays = new Map<string, SearchTranscriptRow>();
++    const excluded = new Set<string>();
++    for (const m of [...(session.lastMessages ?? []), ...view]) {
++        if (!m.id || m.id.startsWith("acp_summary_")) continue;
++        const row = fromWire(m);
++        const ref = session.state.messageRefs.byRaw[m.id], entry = ref && store?.byRef[ref];
++        const original = entry && entry.rawId === m.id ? store?.byHash[entry.hash] : undefined;
++        // A CCR carrier is not an edit. Recover its original if resident; if
++        // unavailable let the persisted source supply it. Real current text,
++        // including empty text and role changes, always wins over stale CCR.
++        const placeholder = typeof row.text === "string" ? parseStoredPlaceholder(row.text) : null;
++        if (placeholder && (!ref || placeholder.ref === ref)) {
++            if (original === undefined) continue;
++            row.text = original;
++        }
++        excluded.add(m.id);
++        overlays.set(m.id, row);
++    }
++    const summaries = session.state.blocks.filter(b => !b.active && (!target || b.blockId === target.blockId))
++        .map(b => ({ id: "summary/" + b.blockId, block: b.blockId, text: [b.topic, b.summary].filter(Boolean).join("\n") }));
++    const options: SearchIndexOptions = {
++        excludeIds: [...excluded], overlays: [...overlays.values()],
++        ...(target ? { allowedIds: target.effectiveMessageIds } : {}), summaries,
++        archiveCoverage: session.state.blocks.filter(b => !target || b.blockId === target.blockId)
++            .map(b => ({ block: b.blockId, ids: b.effectiveMessageIds })),
++    };
++    let result = await queryIndex(session.id, scoped?.[2] ?? query, limit, options);
++    // Most blocks already have typed originals in SQLite. Do not even touch
++    // their lazy full-text backing files, let alone clone them to the worker.
++    if (result?.missingArchiveBlocks?.length && !query.startsWith("open:")) {
++        const missing = new Set(result.missingArchiveBlocks);
++        const archives = session.state.blocks.filter(b => missing.has(b.blockId)).flatMap(b => {
++            const full = session.blockContents.get(b.blockId)?.full;
++            return full?.text ? [{ id: "archive/" + b.blockId, block: b.blockId, text: full.text, coveredIds: b.effectiveMessageIds }] : [];
++        });
++        if (archives.length) result = await queryIndex(session.id, scoped?.[2] ?? query, limit, { ...options, archives });
++    }
++    if (!result) return "[Historical evidence search is temporarily unavailable. No complete search was performed; this is not evidence that a record does not exist. Retry search_context later.]";
++    return renderIndexedEvidence(session, query, limit, result, observe);
++}
++
++/** Render only the worker-selected rows. Neighbor maps describe actual source
++ * adjacency: two hits next to one another in this array are not neighbors. */
++export function renderIndexedEvidence(session: Session, query: string, limit: number, result: SearchIndexResult, observe?: (id: string, text: string) => void): string {
++    const notes = new Map<string, Note>();
++    const coverage = new Map<string, string>();
++    const wanted = new Set(result.rows.map(r => r.id));
++    for (const b of [...session.state.blocks].sort((x, y) => Number(y.active) - Number(x.active) || x.tier - y.tier)) {
++        for (const id of b.effectiveMessageIds) if (wanted.has(id) && !coverage.has(id)) coverage.set(id, b.blockId);
++    }
++    for (const row of result.rows) {
++        const ref = session.state.messageRefs.byRaw[row.id];
++        const summary = row.id.startsWith("summary/");
++        const block = summary ? row.id.slice(8) : coverage.get(row.id);
++        const prepared = row.prepared ? { text: row.prepared.text, lower: row.prepared.text.toLowerCase(), evidence: row.prepared.evidence,
++            offset: row.prepared.offset, totalChars: row.prepared.totalChars, head: row.text ?? "" }
++            : prepareText(session, row.id, row.text ?? "", row.attachment ?? "");
++        notes.set(row.id, { ...prepared, key: row.id,
++            ref: ref?.startsWith("m") ? ref : undefined, block,
++            label: summary ? "historical inactive summary" : metadata(row),
++            corrects: typeof row.corrects === "string" ? row.corrects : undefined });
++    }
++    const cite = (n: Note) => `${clean(n.key).slice(0, 160)}${n.ref ? " " + n.ref : ""}${n.block ? " " + n.block : ""} ${n.label}`;
++    const read = /^open:(ev-[a-f0-9]{24})(?::(\d{1,12}))?$/.exec(query.trim());
++    if (read) {
++        const n = [...notes.values()].find(n => n.evidence === read[1]);
++        if (!n) return "[Original evidence unavailable or changed in this session; repeat the keyword search.]";
++        const offset = Number(read[2] || 0);
++        const total = n.totalChars ?? n.text.length;
++        if (offset >= total) return "[Original evidence page is beyond the end.]";
++        if (n.offset !== undefined && n.offset !== offset) return "[Original evidence page changed during search; repeat the keyword search.]";
++        const body = safePrefix(n.offset === undefined ? n.text.slice(offset) : n.text, pageSize);
++        observe?.(n.key, body);
++        return `[Evidence: ${cite(n)} | ${offset}–${offset + body.length}/${total}]\n${body}` + (offset + body.length < total ? `\n[next query: open:${n.evidence}:${offset + body.length}]` : "");
++    }
++    const text = (/^block:b\d+\s+(.+)$/is.exec(query)?.[1] ?? query).trim().toLowerCase();
++    const terms = [...new Set(text.split(/\s+/))];
++    const lines = result.matchIds.slice(0, limit).flatMap(id => {
++        const n = notes.get(id);
++        if (!n) return [];
++        const indexes = terms.map(t => n.lower.indexOf(t)).filter(i => i >= 0);
++        if (n.offset === undefined && !indexes.length) return [];
++        const start = n.offset ?? Math.max(0, indexes[0]! - 90);
++        const snippet = n.offset === undefined ? n.text.slice(start) : n.text;
++        observe?.(id, safePrefix(snippet, 270));
++        const nearby = Object.entries(result.neighbors[id] ?? {}).flatMap(([direction, neighborId]) => {
++            const neighbor = neighborId ? notes.get(neighborId) : undefined;
++            if (!neighbor) return [];
++            observe?.(neighbor.key, safePrefix(neighbor.head ?? neighbor.text, 125));
++            return [`  ${direction}: ${cite(neighbor)} — ${safePrefix(neighbor.head ?? neighbor.text, 125)}`];
++        });
++        const correctedBy = (result.corrections[id] ?? []).flatMap(key => notes.get(key) ? [notes.get(key)!] : []);
++        return [[cite(n), `  ${start ? "…" : ""}${safePrefix(snippet, 270)}`,
++            `  read: open:${n.evidence}:${start}`,
++            ...(n.corrects ? ["  corrects: " + clean(n.corrects).slice(0, 120)] : []),
++            ...correctedBy.map(c => "  explicitly corrected by " + cite(c)), ...nearby].join("\n")];
++    });
++    for (const block of result.archiveMatches ?? []) lines.push(`${block} [flattened archive locator; original speaker/time unavailable], inspect block via decompress; no attributable quote.`);
++    const warning = result.complete ? "" : "[Stored history coverage is incomplete; available recent messages were searched. A missing record is not evidence it never happened.]\n";
++    return lines.length ? warning + `Own-session historical evidence (indexed keyword search; order and neighboring statements alone do not establish a correction):\n${lines.join("\n\n")}` : warning;
 +}
 +
 +function metadata(m: SearchTranscriptRow): string {
@@ -1221,6 +1455,24 @@ index 0000000000000000000000000000000000000000..c384314fbb2d228bdb9876adc7e96d35
 +    }
 +    return lines.length ? `Own-session historical evidence (keyword search; order and neighboring statements alone do not establish a correction):\n${lines.join("\n\n")}`:"";
 +}
+diff --git a/src/search-text.ts b/src/search-text.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..76e3a0a2057477568f8bfedbfd319ad0f9ae7552
+--- /dev/null
++++ b/src/search-text.ts
+@@ -0,0 +1,12 @@
++import { createHash } from "node:crypto";
++import { redactSecretsInText } from "./log-mask.js";
++
++/** The index is derived, redacted text; original CAS blobs remain the source of truth. */
++export const cleanSearchText = (s: string): string => redactSecretsInText(s)
++    .replace(/((?:令牌|密钥|口令|密码)[】"'\s:=：]*)([\w.+/=-]{8,})/giu, "$1<masked>")
++    .replace(/(?:data:[\w.+/-]+;base64,)?[A-Za-z0-9+/=_-]{128,}/g, "<encoded bytes omitted>");
++
++export function prepareSearchText(sessionId: string, key: string, source: string, attachment = "") {
++    const text = cleanSearchText([source, attachment ? "[attachment] " + attachment : ""].filter(Boolean).join("\n"));
++    return { text, lower: text.toLowerCase(), evidence: "ev-" + createHash("sha256").update(sessionId + "\0" + key + "\0" + text).digest("hex").slice(0, 24) };
++}
 diff --git a/src/server.ts b/src/server.ts
 index ccea8cf4283cbfbe89a426b8be096fda2b3b768a..0f92a1083c24b4d8635c0bf719352ca4eea4d00e 100644
 --- a/src/server.ts
@@ -1313,6 +1565,640 @@ index d1083ee4d7663fe4f8105737dfe5d61b393fc043..5023fd9601951e1e03e277010331abb6
  }
  
  /** Record original block content at compress time. */
+diff --git a/src/storage/search-index-client.ts b/src/storage/search-index-client.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..919dc646468b97bb309567deac94511c3a3d62d7
+--- /dev/null
++++ b/src/storage/search-index-client.ts
+@@ -0,0 +1,168 @@
++import { existsSync } from "node:fs";
++import { createRequire } from "node:module";
++import { Worker } from "node:worker_threads";
++import { pathToFileURL } from "node:url";
++import type { SearchIndexOptions, SearchIndexResult } from "./search-index-types.js";
++import { log as loggerLog } from "../logger.js";
++
++type TransferRow = NonNullable<SearchIndexOptions["overlays"]>[number] | NonNullable<SearchIndexOptions["summaries"]>[number] | NonNullable<SearchIndexOptions["archives"]>[number];
++type TransferState = { overlays: Map<string, TransferRow>; summaries: Map<string, TransferRow>; archives: Map<string, TransferRow>; estimatedBytes: number };
++const transferBudgetBytes = 64 * 1024 * 1024;
++function estimateTransferBytes(row: TransferRow): number {
++    let size = 256;
++    for (const value of Object.values(row)) {
++        if (typeof value === "string") size += value.length * 2;
++        else if (Array.isArray(value)) for (const item of value) if (typeof item === "string") size += 32 + item.length * 2;
++    }
++    return size;
++}
++function equalRow(a: TransferRow, b: TransferRow): boolean {
++    const left = a as unknown as Record<string, unknown>, right = b as unknown as Record<string, unknown>;
++    const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
++    for (const key of keys) {
++        const av = left[key], bv = right[key];
++        if (av === bv) continue;
++        if (Array.isArray(av) && Array.isArray(bv) && av.length === bv.length && av.every((value, index) => value === bv[index])) continue;
++        return false;
++    }
++    return true;
++}
++function transferDelta(rows: readonly TransferRow[], prior: Map<string, TransferRow>) {
++    const current = new Map<string, TransferRow>();
++    const changed: TransferRow[] = [];
++    let estimatedBytes = 0;
++    for (const row of rows) {
++        const old = prior.get(row.id);
++        const unchanged = old && equalRow(old, row);
++        if (!unchanged) changed.push(row);
++        // Copy only the tiny field object. Strings are immutable and keep their
++        // existing allocation; no JSON/hash/full-text normalization on the host.
++        current.set(row.id, unchanged ? old : { ...row, ...("coveredIds" in row && row.coveredIds ? { coveredIds: [...row.coveredIds] } : {}) });
++        estimatedBytes += estimateTransferBytes(row);
++    }
++    return { current, changed, removed: [...prior.keys()].filter(id => !current.has(id)), order: [...current.keys()], estimatedBytes };
++}
++
++/** One worker per owning store; all heavy history reads/index maintenance stay
++ * outside the host event loop. Source and bundled entries use explicit loaders. */
++export class SearchIndexClient {
++    private worker: Worker | null = null;
++    private sequence = 0;
++    private closed = false;
++    private transfers = new Map<string, TransferState>();
++    private transferBytes = 0;
++    private queues = new Map<string, Promise<void>>();
++    private transferred = { overlayRows: 0, overlayChars: 0, summaryRows: 0, archiveRows: 0 };
++    private pending = new Map<number, { sessionId: string; resolve: (value: SearchIndexResult | null) => void; timer: ReturnType<typeof setTimeout> }>();
++    constructor(readonly path: string | null) {}
++    /** Content-free transport counters, for long-history regression checks. */
++    diagnostics() { return { ...this.transferred, residentSessions: this.transfers.size, residentEstimatedBytes: this.transferBytes, transferBudgetBytes }; }
++    private forgetTransfer(sessionId: string) {
++        this.transferBytes -= this.transfers.get(sessionId)?.estimatedBytes ?? 0;
++        this.transfers.delete(sessionId);
++    }
++    private start(): Worker {
++        if (this.closed) throw Error("History index is closed");
++        if (this.worker) return this.worker;
++        const source = new URL("./search-index-worker.ts", import.meta.url);
++        let worker: Worker;
++        if (existsSync(source)) {
++            const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href;
++            worker = new Worker(`const {workerData}=require('node:worker_threads'); import(workerData.loader).then(({register})=>{register();return import(workerData.entry)});`, {
++                eval: true, workerData: { path: this.path, entry: source.href, loader }, execArgv: [],
++            });
++        } else {
++            const entry = ["./search-index-worker.js", "./storage/search-index-worker.js", "../storage/search-index-worker.js", "../../storage/search-index-worker.js"].map(p => new URL(p, import.meta.url)).find(p => existsSync(p));
++            if (!entry) throw Error("Packaged history search worker is missing");
++            worker = new Worker(entry, { workerData: { path: this.path }, execArgv: [] });
++        }
++        this.worker = worker;
++        // A replacement worker has no overlay snapshot. Never send it a delta
++        // which assumes that a previous crashed worker received the base.
++        this.transfers.clear(); this.transferBytes = 0;
++        worker.on("message", (message: { id: number; result?: SearchIndexResult; error?: string }) => {
++            if (this.worker !== worker) return;
++            const request = this.pending.get(message.id); if (!request) return;
++            if (message.error) loggerLog("warn", "[history-search] index query failed; original history retained; worker-error");
++            // The worker may fail before applying a delta (for example while
++            // opening a locked source). The next request must resend its base.
++            if (message.error || !message.result) this.forgetTransfer(request.sessionId);
++            clearTimeout(request.timer); this.pending.delete(message.id); request.resolve(message.result ?? null);
++            if (!this.pending.size) worker.unref();
++        });
++        const fail = () => {
++            if (this.worker !== worker) return;
++            loggerLog("warn", "[history-search] worker stopped before completing queries; original history retained");
++            if (this.worker === worker) this.worker = null;
++            this.transfers.clear(); this.transferBytes = 0;
++            for (const request of this.pending.values()) { clearTimeout(request.timer); request.resolve(null); }
++            this.pending.clear();
++        };
++        worker.on("error", fail); worker.on("exit", fail); worker.unref();
++        return worker;
++    }
++    query(sessionId: string, query: string, limit: number, options: SearchIndexOptions = {}): Promise<SearchIndexResult | null> {
++        // A following delta cannot assume an in-flight base was accepted. Other
++        // sessions remain independent; per-session requests await their receipt.
++        const before = this.queues.get(sessionId);
++        const run = () => this.queryNow(sessionId, query, limit, options);
++        const result = before ? before.then(run, run) : run();
++        const tail = result.then(() => undefined, () => undefined);
++        this.queues.set(sessionId, tail);
++        void tail.then(() => { if (this.queues.get(sessionId) === tail) this.queues.delete(sessionId); });
++        return result;
++    }
++    private queryNow(sessionId: string, query: string, limit: number, options: SearchIndexOptions): Promise<SearchIndexResult | null> {
++        let worker: Worker; try { worker = this.start(); } catch { return Promise.resolve(null); }
++        const prior = this.transfers.get(sessionId), reset = !prior;
++        const overlay = transferDelta(options.overlays ?? [], prior?.overlays ?? new Map());
++        const summary = transferDelta(options.summaries ?? [], prior?.summaries ?? new Map());
++        // Coverage-only first pass keeps the already supplied legacy archives;
++        // the following missing-block pass supplies their authoritative bodies.
++        const allowedArchives = options.archiveCoverage === undefined ? null : new Set(options.archiveCoverage.map(block => block.block));
++        const archiveRows = (options.archives ?? [...(prior?.archives.values() ?? [])]).filter(row => !allowedArchives || ("block" in row && allowedArchives.has(row.block)));
++        const archive = transferDelta(archiveRows, prior?.archives ?? new Map());
++        this.forgetTransfer(sessionId);
++        const estimatedBytes = overlay.estimatedBytes + summary.estimatedBytes + archive.estimatedBytes;
++        this.transfers.set(sessionId, { overlays: overlay.current, summaries: summary.current, archives: archive.current, estimatedBytes });
++        this.transferBytes += estimatedBytes;
++        const discardSessions: string[] = [];
++        // Keep a single large active session so every search does not resend its
++        // history, but evict other least-recent owners above the bounded budget.
++        while (this.transfers.size > 16 || (this.transferBytes > transferBudgetBytes && this.transfers.size > 1)) {
++            const oldest = this.transfers.keys().next().value!;
++            this.forgetTransfer(oldest); discardSessions.push(oldest);
++        }
++        const transferred: SearchIndexOptions = { ...options,
++            overlays: overlay.changed as SearchIndexOptions["overlays"], overlayReset: reset, overlayRemovedIds: overlay.removed, overlayOrderIds: overlay.order,
++            summaries: summary.changed as SearchIndexOptions["summaries"], summaryReset: reset, summaryRemovedIds: summary.removed, summaryOrderIds: summary.order,
++            archives: archive.changed as SearchIndexOptions["archives"], archiveReset: reset, archiveRemovedIds: archive.removed, archiveOrderIds: archive.order,
++            discardSessions,
++        };
++        this.transferred.overlayRows += overlay.changed.length;
++        this.transferred.overlayChars += overlay.changed.reduce((total, row) => total + (row.text?.length ?? 0) + ("attachment" in row ? row.attachment?.length ?? 0 : 0), 0);
++        this.transferred.summaryRows += summary.changed.length;
++        this.transferred.archiveRows += archive.changed.length;
++        return new Promise(resolve => {
++            const id = ++this.sequence;
++            const timer = setTimeout(() => { void this.stop(false); }, 120_000);
++            this.pending.set(id, { sessionId, resolve, timer }); worker.ref();
++            try { worker.postMessage({ id, sessionId, query, limit, options: transferred }); } catch { void this.stop(false); }
++        });
++    }
++    private async stop(final: boolean) {
++        if (final) this.closed = true;
++        const worker = this.worker; this.worker = null;
++        this.transfers.clear(); this.transferBytes = 0;
++        for (const request of this.pending.values()) { clearTimeout(request.timer); request.resolve(null); }
++        this.pending.clear();
++        if (worker) await worker.terminate();
++    }
++    close(): Promise<void> { return this.stop(true); }
++}
++
++let transient: SearchIndexClient | undefined;
++export function queryTransientEvidence(sessionId: string, query: string, limit: number, options?: SearchIndexOptions) {
++    transient ??= new SearchIndexClient(null);
++    return transient.query(sessionId, query, limit, options);
++}
+diff --git a/src/storage/search-index-engine.ts b/src/storage/search-index-engine.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ce11ed3e752efa300539953d6dbe9d659f59eec9
+--- /dev/null
++++ b/src/storage/search-index-engine.ts
+@@ -0,0 +1,335 @@
++import { DatabaseSync } from "node:sqlite";
++import { renameSync } from "node:fs";
++import { safePrefix } from "../text-safe.js";
++import { cleanSearchText, prepareSearchText } from "../search-text.js";
++import type { SearchIndexOptions, SearchIndexResult, SearchIndexRow } from "./search-index-types.js";
++import type { SearchTranscriptRow } from "./store.js";
++
++const batchSize = 250;
++const indexVersion = "redacted-grams-v2";
++const stringValue = (value: unknown) => typeof value === "string" ? value : "";
++const objectValue = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
++const eligible = (row: SearchTranscriptRow) => !!row.id && row.contentType !== "reasoning" && ["user", "assistant", "tool"].includes(row.role) && !row.id.startsWith("acp_summary_");
++function sanitized(row: SearchIndexRow): SearchIndexRow {
++    return { id: row.id, seq: row.seq, role: row.role, contentType: row.contentType,
++        text: cleanSearchText(stringValue(row.text)), attachment: cleanSearchText(stringValue(row.attachment)),
++        toolName: cleanSearchText(stringValue(row.toolName)), sourceKind: cleanSearchText(stringValue(row.sourceKind)),
++        corrects: cleanSearchText(stringValue(row.corrects)),
++        timestamp: typeof row.timestamp === "number" || typeof row.timestamp === "string" ? row.timestamp : null };
++}
++/** Hex-encoded character grams are tokenizer-independent, including Chinese names,
++ * punctuation in paths/flags, and one-character queries. Exact instr is still final. */
++const gram = (chars: string[]) => "g" + chars.map(c => c.codePointAt(0)!.toString(16)).join("x");
++function shortGrams(text: string): string {
++    const chars = [...text], out = new Set<string>();
++    for (let i = 0; i < chars.length; i++) { out.add(gram([chars[i]!])); if (i) out.add(gram([chars[i - 1]!, chars[i]!])); }
++    return [...out].join(" ");
++}
++const quote = (text: string) => '"' + text.replaceAll('"', '""') + '"';
++type Doc = { rowid: number; seq: number; msg_id: string; body: string; data: string; evidence: string };
++
++export class SearchIndexEngine {
++    private source: DatabaseSync | null;
++    private index: DatabaseSync;
++    private fts = true;
++    private closed = false;
++    private transactionDepth = 0;
++    private changedIds = new Set<string>();
++    private overlaySessions = new Map<string, { all: Map<string, SearchTranscriptRow>; effective: Map<string, SearchIndexRow>; invalid: Set<string>; canonical: Set<string>; summaries: Map<string, NonNullable<SearchIndexOptions['summaries']>[number]>; archives: Map<string, NonNullable<SearchIndexOptions['archives']>[number]> }>();
++    constructor(readonly path: string | null) {
++        this.source = path ? new DatabaseSync(path, { readOnly: true }) : null;
++        this.source?.exec("PRAGMA busy_timeout=5000");
++        const indexPath = path ? path + ".search.sqlite" : ":memory:";
++        this.index = new DatabaseSync(indexPath);
++        this.index.exec("PRAGMA busy_timeout=5000");
++        try {
++            const check = this.index.prepare("PRAGMA quick_check(1)").get() as Record<string, string>;
++            if (Object.values(check)[0] !== "ok") throw Error("Derived index corrupt");
++        } catch (err) {
++            this.index.close();
++            const code = Number((err as { errcode?: number }).errcode);
++            const corrupt = code === 11 || code === 26 || /not a database|malformed|Derived index corrupt/i.test(String(err));
++            if (!path || !corrupt) throw err;
++            // Only this disposable sidecar is quarantined. Canonical history is read-only.
++            renameSync(indexPath, indexPath + ".corrupt-" + Date.now());
++            this.index = new DatabaseSync(indexPath);
++        }
++        // The derived DB has its own writer and uses rollback journal. Do not add
++        // a second WAL writer/checkpointer to the canonical history database.
++        this.index.exec(`PRAGMA journal_mode=DELETE; PRAGMA busy_timeout=5000;
++CREATE TABLE IF NOT EXISTS meta(id INTEGER PRIMARY KEY,generation TEXT);
++CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY,cursor INTEGER NOT NULL DEFAULT -1,ready INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0);
++CREATE TABLE IF NOT EXISTS docs(rowid INTEGER PRIMARY KEY,session_id TEXT NOT NULL,seq INTEGER NOT NULL,msg_id TEXT NOT NULL,body TEXT NOT NULL,shorts TEXT NOT NULL,data TEXT NOT NULL,evidence TEXT NOT NULL,corrects TEXT,UNIQUE(session_id,seq));
++CREATE INDEX IF NOT EXISTS docs_id ON docs(session_id,msg_id);
++CREATE INDEX IF NOT EXISTS docs_id_seq ON docs(session_id,msg_id,seq);
++CREATE INDEX IF NOT EXISTS docs_evidence ON docs(session_id,evidence);
++CREATE INDEX IF NOT EXISTS docs_correction ON docs(session_id,corrects);`);
++        try {
++            this.index.exec("BEGIN IMMEDIATE");
++            const triggerCount = Number((this.index.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='trigger' AND name IN ('docs_ai','docs_ad','docs_au')").get() as { n: number }).n);
++            const previousMode = (this.index.prepare("SELECT generation FROM meta WHERE id=1").get() as { generation: string } | undefined)?.generation ?? "";
++            const repairing = triggerCount !== 3 || previousMode.includes(":scan:");
++            const existingShort = (this.index.prepare("SELECT sql FROM sqlite_master WHERE name='short'").get() as { sql: string } | undefined)?.sql;
++            const missing = !this.index.prepare("SELECT 1 FROM sqlite_master WHERE name='tri'").get();
++            // v2: no duplicate gram text/position list; these are exact short-token lookups.
++            this.index.exec("DROP TRIGGER IF EXISTS docs_ai; DROP TRIGGER IF EXISTS docs_ad; DROP TRIGGER IF EXISTS docs_au;");
++            if (existingShort && (!existingShort.includes("contentless_delete") || repairing)) this.index.exec("DROP TABLE short; DELETE FROM meta;");
++            const newShort = !this.index.prepare("SELECT 1 FROM sqlite_master WHERE name='short'").get();
++            this.index.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS tri USING fts5(body,content=docs,content_rowid=rowid,tokenize='trigram case_sensitive 1');
++CREATE VIRTUAL TABLE IF NOT EXISTS short USING fts5(shorts,content='',contentless_delete=1,detail=none);
++CREATE TRIGGER docs_ai AFTER INSERT ON docs BEGIN
++ INSERT INTO tri(rowid,body) VALUES(NEW.rowid,NEW.body); END;
++CREATE TRIGGER docs_ad AFTER DELETE ON docs BEGIN
++ INSERT INTO tri(tri,rowid,body) VALUES('delete',OLD.rowid,OLD.body); DELETE FROM short WHERE rowid=OLD.rowid; END;
++CREATE TRIGGER docs_au AFTER UPDATE ON docs BEGIN
++ INSERT INTO tri(tri,rowid,body) VALUES('delete',OLD.rowid,OLD.body); DELETE FROM short WHERE rowid=OLD.rowid;
++ INSERT INTO tri(rowid,body) VALUES(NEW.rowid,NEW.body); END;`);
++            if (missing || repairing) this.index.exec("INSERT INTO tri(tri) VALUES('rebuild');");
++            if (newShort) this.index.exec("DELETE FROM meta;");
++            this.index.exec("COMMIT");
++        } catch {
++            try { this.index.exec("ROLLBACK"); } catch { /* no active schema transaction */ }
++            this.index.exec("DROP TRIGGER IF EXISTS docs_ai; DROP TRIGGER IF EXISTS docs_ad; DROP TRIGGER IF EXISTS docs_au;");
++            this.fts = false;
++        }
++        this.index.exec("CREATE TEMP TABLE query_excluded(id TEXT PRIMARY KEY); CREATE TEMP TABLE query_allowed(id TEXT PRIMARY KEY);");
++    }
++    close() { if (this.closed) return; this.closed = true; this.source?.close(); this.index.close(); }
++    private transaction<T>(work: () => T): T {
++        const depth = this.transactionDepth++;
++        const savepoint = "search_batch_" + depth;
++        try {
++            this.index.exec(depth ? "SAVEPOINT " + savepoint : "BEGIN IMMEDIATE");
++            try { const result = work(); this.index.exec(depth ? "RELEASE " + savepoint : "COMMIT"); return result; }
++            catch (err) { this.index.exec(depth ? "ROLLBACK TO " + savepoint : "ROLLBACK"); if (depth) this.index.exec("RELEASE " + savepoint); throw err; }
++        } finally { this.transactionDepth--; }
++    }
++    private project(sessionId: string, seq: number): SearchIndexRow | null {
++        const raw = this.source!.prepare(`SELECT m.seq,m.msg_id AS id,m.role,m.kind AS contentType,CAST(c.bytes AS TEXT) AS content
++ FROM messages m JOIN content c ON c.hash=m.content_hash
++ WHERE m.session_id=? AND m.seq=? AND m.retired_at IS NULL AND m.role IN ('user','assistant','tool') AND m.kind!='reasoning'`).get(sessionId, seq) as { seq: number; id: string; role: string; contentType: string; content: string } | undefined;
++        if (!raw || raw.id.startsWith("acp_summary_")) return null;
++        let value: Record<string, unknown>;
++        try { value = objectValue(JSON.parse(raw.content)); } catch { return null; }
++        const part = objectValue(value.rawAnthropicBlock ?? value.rawOpenaiContent ?? value.rawResponsesItem);
++        return sanitized({ id: raw.id, seq, role: raw.role, contentType: raw.contentType,
++            text: typeof value.text === "string" ? value.text : "", toolName: stringValue(value.toolName),
++            timestamp: typeof value.timestamp === "number" || typeof value.timestamp === "string" ? value.timestamp : null,
++            sourceKind: stringValue(objectValue(value.source).kind),
++            corrects: typeof value.corrects === "string" ? value.corrects : null,
++            attachment: [objectValue(value.attachment).description, part.description, part.title, part.filename, part.alt, value.imageMediaType].map(stringValue).find(Boolean) ?? "" });
++    }
++    private put(sessionId: string, seq: number) {
++        const old = this.index.prepare("SELECT msg_id FROM docs WHERE session_id=? AND seq=?").get(sessionId, seq) as { msg_id: string } | undefined;
++        if (old) this.changedIds.add(old.msg_id);
++        const row = this.project(sessionId, seq);
++        if (row) this.changedIds.add(row.id);
++        if (!row) { this.index.prepare("DELETE FROM docs WHERE session_id=? AND seq=?").run(sessionId, seq); return; }
++        const prepared = prepareSearchText(sessionId, row.id, row.text ?? "", row.attachment ?? "");
++        this.index.prepare(`INSERT INTO docs(session_id,seq,msg_id,body,shorts,data,evidence,corrects) VALUES(?,?,?,?,?,?,?,?)
++ ON CONFLICT(session_id,seq) DO UPDATE SET msg_id=excluded.msg_id,body=excluded.body,shorts=excluded.shorts,data=excluded.data,evidence=excluded.evidence,corrects=excluded.corrects`)
++            .run(sessionId, seq, row.id, prepared.lower, "", JSON.stringify(row), prepared.evidence, row.corrects ?? null);
++        if (this.fts) {
++            const stored = this.index.prepare("SELECT rowid FROM docs WHERE session_id=? AND seq=?").get(sessionId, seq) as { rowid: number };
++            this.index.prepare("INSERT INTO short(rowid,shorts) VALUES(?,?)").run(stored.rowid, shortGrams(prepared.lower));
++        }
++    }
++    private sync(sessionId: string): { revision: number; indexed: number } {
++        if (!this.source) return { revision: 0, indexed: 0 };
++        const rawGeneration = (this.source.prepare("SELECT generation FROM search_index_meta WHERE id=1").get() as { generation: string } | undefined)?.generation;
++        if (!rawGeneration) throw Error("History index change journal is unavailable");
++        const generation = indexVersion + (this.fts ? ":fts:" : ":scan:") + rawGeneration;
++        const prior = (this.index.prepare("SELECT generation FROM meta WHERE id=1").get() as { generation: string } | undefined)?.generation;
++        if (generation !== prior) this.transaction(() => {
++            this.index.exec("DELETE FROM docs; DELETE FROM sessions;");
++            this.index.prepare("INSERT INTO meta VALUES(1,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation").run(generation);
++        });
++        const revision = Number((this.source.prepare("SELECT revision FROM search_index_versions WHERE session_id=?").get(sessionId) as { revision: number } | undefined)?.revision ?? 0);
++        let state = this.index.prepare("SELECT cursor,ready,revision FROM sessions WHERE session_id=?").get(sessionId) as { cursor: number; ready: number; revision: number } | undefined;
++        if (state?.ready && state.revision === revision) return { revision, indexed: 0 };
++        if (!state) {
++            this.index.prepare("INSERT INTO sessions(session_id) VALUES(?)").run(sessionId);
++            state = { cursor: -1, ready: 0, revision: 0 };
++        }
++        let indexed = 0;
++        if (!state.ready) {
++            while (true) {
++                const rows = this.source.prepare("SELECT seq FROM messages WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?").all(sessionId, state.cursor, batchSize) as { seq: number }[];
++                if (!rows.length) break;
++                this.transaction(() => {
++                    for (const row of rows) { this.put(sessionId, row.seq); indexed++; }
++                    state!.cursor = rows.at(-1)!.seq;
++                    this.index.prepare("UPDATE sessions SET cursor=? WHERE session_id=?").run(state!.cursor, sessionId);
++                });
++            }
++        }
++        // Each canonical row has at most one dirty slot. A deleted row remains a
++        // tombstone, so restart and cross-connection changes cannot resurrect it.
++        const dirty = this.source.prepare("SELECT seq FROM search_index_dirty WHERE session_id=? AND revision>? AND revision<=? ORDER BY revision,seq").all(sessionId, state.revision, revision) as { seq: number }[];
++        for (let i = 0; i < dirty.length; i += batchSize) this.transaction(() => {
++            for (const row of dirty.slice(i, i + batchSize)) { this.put(sessionId, row.seq); indexed++; }
++        });
++        this.index.prepare("UPDATE sessions SET ready=1,revision=? WHERE session_id=?").run(revision, sessionId);
++        return { revision, indexed };
++    }
++    query(sessionId: string, query: string, limit: number, options: SearchIndexOptions = {}): SearchIndexResult {
++        if (this.closed) throw Error("History search worker is closed");
++        const started = performance.now();
++        this.changedIds.clear();
++        // One read snapshot covers version, source projection, index sync and
++        // selected evidence. Concurrent updates belong to the next search.
++        return this.transaction(() => {
++            // Serialize only this disposable sidecar's writers before opening the
++            // source snapshot. Other processes cannot advance the index past our
++            // snapshot or rewrite candidates between synchronization and ranking.
++            this.source?.exec("BEGIN");
++            try { return this.querySnapshot(sessionId, query, limit, options, started); }
++            finally { this.source?.exec("ROLLBACK"); }
++        });
++    }
++    private querySnapshot(sessionId: string, query: string, limit: number, options: SearchIndexOptions, started: number): SearchIndexResult {
++        const { revision, indexed } = this.sync(sessionId);
++        limit = Math.min(12, Math.max(1, Math.floor(limit) || 5));
++        const scoped = /^block:(b\d+)\s+(.+)$/is.exec(query);
++        const text = (scoped?.[2] ?? query).trim().toLowerCase();
++        const read = /^open:(ev-[a-f0-9]{24})(?::\d{1,12})?$/.exec(query.trim());
++        const terms = [...new Set(text.split(/\s+/).filter(Boolean))];
++        if (!text || text.length > 1024) throw Error("Search query must contain 1–1024 characters");
++        const tail = this.index.prepare("SELECT seq,msg_id FROM docs WHERE session_id=? ORDER BY seq DESC LIMIT 1").get(sessionId) as { seq: number; msg_id: string } | undefined;
++        let sequence = tail?.seq ?? -1;
++        for (const discarded of options.discardSessions ?? []) this.overlaySessions.delete(discarded);
++        let cached = this.overlaySessions.get(sessionId);
++        if (!cached) { cached = { all: new Map(), effective: new Map(), invalid: new Set(), canonical: new Set(), summaries: new Map(), archives: new Map() }; this.overlaySessions.set(sessionId, cached); }
++        const protocol = options.overlayOrderIds !== undefined || options.overlayReset !== undefined;
++        if (!protocol || options.overlayReset) { cached.all.clear(); cached.effective.clear(); cached.invalid.clear(); cached.canonical.clear(); }
++        for (const id of options.overlayRemovedIds ?? []) { cached.all.delete(id); cached.effective.delete(id); cached.invalid.delete(id); cached.canonical.delete(id); }
++        const changed = new Set(this.changedIds), explicitChanges = new Set<string>();
++        for (const raw of options.overlays ?? []) { cached.all.set(raw.id, raw); changed.add(raw.id); explicitChanges.add(raw.id); }
++        for (const id of changed) {
++            const raw = cached.all.get(id); if (!raw) continue;
++            // A previously identical resident snapshot is not a new edit. If the
++            // source was corrected/deleted independently, its unchanged copy must
++            // not resurrect the former value. A new overlay delta remains authoritative.
++            if (cached.canonical.has(id) && !explicitChanges.has(id)) { cached.effective.delete(id); continue; }
++            cached.canonical.delete(id);
++            if (!eligible(raw)) { cached.invalid.add(id); cached.effective.delete(id); continue; }
++            cached.invalid.delete(id);
++            const old = this.index.prepare("SELECT seq,data FROM docs WHERE session_id=? AND msg_id=? ORDER BY seq DESC LIMIT 1").get(sessionId, id) as { seq: number; data: string } | undefined;
++            const prior = old ? JSON.parse(old.data) as SearchIndexRow : undefined;
++            const row = sanitized({ ...raw, seq: old?.seq ?? ++sequence,
++                timestamp: raw.timestamp ?? prior?.timestamp, sourceKind: raw.sourceKind ?? prior?.sourceKind,
++                corrects: raw.corrects ?? prior?.corrects, attachment: raw.attachment ?? prior?.attachment, toolName: raw.toolName ?? prior?.toolName });
++            // Resident full-history views commonly repeat the canonical source.
++            // Keep their authority, but only scan true differences on each search.
++            const fields = ['text','attachment','role','contentType','timestamp','sourceKind','toolName','corrects'] as const;
++            if (prior && fields.every(field => row[field] === prior[field])) { cached.effective.delete(id); cached.canonical.add(id); }
++            else cached.effective.set(id, row);
++        }
++        const overlays = cached.effective;
++        const orderIds = options.overlayOrderIds ?? [...cached.all.keys()];
++        sequence = tail?.seq ?? -1;
++        for (const id of orderIds) {
++            const row = overlays.get(id); if (!row) continue;
++            const persisted = this.index.prepare("SELECT seq FROM docs WHERE session_id=? AND msg_id=? ORDER BY seq DESC LIMIT 1").get(sessionId, id) as { seq: number } | undefined;
++            row.seq = persisted?.seq ?? ++sequence;
++        }
++        const excluded = new Set((options.excludeIds ?? []).filter(id => !cached!.all.has(id)));
++        for (const id of cached.invalid) excluded.add(id);
++        for (const id of overlays.keys()) excluded.add(id);
++        if (options.summaryOrderIds === undefined || options.summaryReset) cached.summaries.clear();
++        for (const id of options.summaryRemovedIds ?? []) cached.summaries.delete(id);
++        for (const row of options.summaries ?? []) cached.summaries.set(row.id, row);
++        if (options.archiveOrderIds === undefined || options.archiveReset) cached.archives.clear();
++        for (const id of options.archiveRemovedIds ?? []) cached.archives.delete(id);
++        for (const row of options.archives ?? []) cached.archives.set(row.id, row);
++        if (options.archiveCoverage) {
++            const currentBlocks = new Set(options.archiveCoverage.map(block => block.block));
++            for (const [id, archive] of cached.archives) if (!currentBlocks.has(archive.block)) cached.archives.delete(id);
++        }
++        const summaries = new Map<string, SearchIndexRow>();
++        for (const row of cached.summaries.values()) summaries.set(row.id, { id: row.id, seq: ++sequence, role: "summary", contentType: "text", text: cleanSearchText(row.text) });
++        this.index.exec("DELETE FROM query_excluded; DELETE FROM query_allowed;");
++        for (const id of excluded) this.index.prepare("INSERT OR IGNORE INTO query_excluded VALUES(?)").run(id);
++        const allowed = options.allowedIds ? new Set(options.allowedIds) : null;
++        if (allowed) for (const id of allowed) this.index.prepare("INSERT OR IGNORE INTO query_allowed VALUES(?)").run(id);
++        const constraints = `d.session_id=? AND NOT EXISTS(SELECT 1 FROM query_excluded e WHERE e.id=d.msg_id)
++ AND NOT EXISTS(SELECT 1 FROM docs newer INDEXED BY docs_id_seq WHERE newer.session_id=d.session_id AND newer.msg_id=d.msg_id AND newer.seq>d.seq)` + (allowed ? " AND EXISTS(SELECT 1 FROM query_allowed a WHERE a.id=d.msg_id)" : "");
++        let selected: Doc[] = [];
++        let matched = 0;
++        const scoreOf = (body: string) => terms.reduce((n, t) => n + Number(body.includes(t)), 0) + (body.includes(text) ? terms.length : 0);
++        if (read) {
++            selected = this.index.prepare(`SELECT d.* FROM docs d WHERE ${constraints} AND evidence=? ORDER BY seq DESC LIMIT 1`).all(sessionId, read[1]) as unknown as Doc[];
++        } else {
++            const candidateQueries: string[] = [], params: string[] = [];
++            for (const term of terms) {
++                if (this.fts) {
++                    const short = [...term].length < 3;
++                    candidateQueries.push(`SELECT rowid FROM ${short ? "short" : "tri"} WHERE ${short ? "short" : "tri"} MATCH ?`);
++                    params.push(quote(short ? gram([...term]) : term));
++                }
++            }
++            const candidates = this.fts ? `AND d.rowid IN (${candidateQueries.join(" UNION ")})` : "";
++            const score = terms.map(() => "CASE WHEN instr(d.body,?)>0 THEN 1 ELSE 0 END").join("+") + "+CASE WHEN instr(d.body,?)>0 THEN ? ELSE 0 END";
++            const sql = `SELECT d.rowid,(${score}) AS score FROM docs d WHERE ${constraints} ${candidates} AND (${terms.map(() => "instr(d.body,?)>0").join(" OR ")}) ORDER BY score DESC,d.seq DESC LIMIT ?`;
++            const chosen = this.index.prepare(sql).all(...terms, text, terms.length, sessionId, ...params, ...terms, limit) as { rowid: number }[];
++            selected = chosen.map(row => this.index.prepare("SELECT * FROM docs WHERE rowid=?").get(row.rowid) as unknown as Doc);
++        }
++        const candidates = selected.map(doc => ({ row: JSON.parse(doc.data) as SearchIndexRow, body: doc.body, evidence: doc.evidence }));
++        for (const row of [...overlays.values(), ...summaries.values()]) {
++            if (allowed && !allowed.has(row.id) && row.role !== "summary") continue;
++            const prepared = prepareSearchText(sessionId, row.id, row.text ?? "", row.attachment ?? "");
++            if (read ? prepared.evidence === read[1] : terms.some(t => prepared.lower.includes(t))) candidates.push({ row, body: prepared.lower, evidence: prepared.evidence });
++        }
++        const hits = candidates.sort((a, b) => (read ? 0 : scoreOf(b.body) - scoreOf(a.body)) || b.row.seq - a.row.seq).slice(0, limit);
++        matched = candidates.length;
++        const rows = new Map<string, SearchIndexRow>();
++        const add = (row?: SearchIndexRow | null) => { if (row) rows.set(row.id, overlays.get(row.id) ?? row); };
++        for (const hit of hits) add(hit.row);
++        const get = (id: string) => cached!.invalid.has(id) || (excluded.has(id) && !overlays.has(id)) ? null : overlays.get(id) ?? (() => { const doc = this.index.prepare("SELECT data FROM docs WHERE session_id=? AND msg_id=? ORDER BY seq DESC LIMIT 1").get(sessionId, id) as { data: string } | undefined; return doc ? JSON.parse(doc.data) as SearchIndexRow : null; })();
++        const neighbors: SearchIndexResult["neighbors"] = {}, corrections: SearchIndexResult["corrections"] = {};
++        const contextIds = new Set([...hits.filter(h => h.row.role !== "summary").map(h => h.row.id), ...(options.contextIds ?? [])]);
++        for (const id of contextIds) {
++            const row = get(id); if (!row) continue; add(row);
++            const relation: { previous?: string; next?: string } = {};
++            for (const direction of ["previous", "next"] as const) {
++                const operator = direction === "previous" ? "<" : ">", order = direction === "previous" ? "DESC" : "ASC";
++                const doc = this.index.prepare(`SELECT d.data FROM docs d WHERE d.session_id=? AND d.seq${operator}?
++ AND NOT EXISTS(SELECT 1 FROM query_excluded e WHERE e.id=d.msg_id)
++ AND NOT EXISTS(SELECT 1 FROM docs newer INDEXED BY docs_id_seq WHERE newer.session_id=d.session_id AND newer.msg_id=d.msg_id AND newer.seq>d.seq)
++ ORDER BY d.seq ${order} LIMIT 1`).get(sessionId, row.seq) as { data: string } | undefined;
++                const possible = [...overlays.values()].filter(r => direction === "previous" ? r.seq < row.seq : r.seq > row.seq);
++                if (doc) possible.push(JSON.parse(doc.data));
++                possible.sort((a, b) => direction === "previous" ? b.seq - a.seq : a.seq - b.seq);
++                const near = possible[0]; if (near) { add(near); relation[direction] = near.id; }
++            }
++            neighbors[id] = relation;
++            const ref = this.source?.prepare("SELECT ref FROM messages WHERE session_id=? AND msg_id=? AND retired_at IS NULL ORDER BY seq DESC LIMIT 1").get(sessionId, id) as { ref?: string } | undefined;
++            const corrected = this.index.prepare(`SELECT d.data FROM docs d INDEXED BY docs_correction WHERE d.session_id=? AND (d.corrects=? OR d.corrects=?)
++ AND NOT EXISTS(SELECT 1 FROM query_excluded e WHERE e.id=d.msg_id)
++ AND NOT EXISTS(SELECT 1 FROM docs newer INDEXED BY docs_id_seq WHERE newer.session_id=d.session_id AND newer.msg_id=d.msg_id AND newer.seq>d.seq)
++ ORDER BY d.seq DESC LIMIT 3`).all(sessionId, id, ref?.ref ?? id) as { data: string }[];
++            const related = [...corrected.map(d => JSON.parse(d.data) as SearchIndexRow).filter(r => !excluded.has(r.id)), ...[...overlays.values()].filter(r => r.corrects === id || (!!ref?.ref && r.corrects === ref.ref))].sort((a, b) => b.seq - a.seq).slice(0, 3);
++            for (const correction of related) add(correction);
++            corrections[id] = related.map(r => r.id);
++        }
++        const actualTail = [...overlays.values()].sort((a, b) => b.seq - a.seq).find(r => r.seq >= (tail?.seq ?? -1)) ?? (tail ? { id: tail.msg_id } : null);
++        // tailId is navigation metadata only; do not transfer a multi-megabyte tail body.
++        const archiveMatches: string[] = [];
++        if (!read) for (const archive of cached.archives.values()) {
++            if (scoped && archive.block !== scoped[1]) continue;
++            if (archive.coveredIds?.length && archive.coveredIds.every(id => overlays.has(id) || !!this.index.prepare("SELECT 1 FROM docs WHERE session_id=? AND msg_id=? LIMIT 1").get(sessionId, id))) continue;
++            const body = cleanSearchText(archive.text).toLowerCase();
++            if (terms.every(t => body.includes(t)) && archiveMatches.length < Math.min(3, limit)) archiveMatches.push(archive.block);
++        }
++        const missingArchiveBlocks = (options.archiveCoverage ?? []).filter(block => block.ids.some(id => !overlays.has(id) && !this.index.prepare("SELECT 1 FROM docs WHERE session_id=? AND msg_id=? LIMIT 1").get(sessionId, id))).map(block => block.block);
++        const compactRows = [...rows.values()].sort((a, b) => a.seq - b.seq).map(row => {
++            const prepared = prepareSearchText(sessionId, row.id, row.text ?? "", row.attachment ?? "");
++            const at = terms.map(t => prepared.lower.indexOf(t)).find(at => at >= 0) ?? 0;
++            const offset = read ? Number(query.match(/:(\d+)$/)?.[1] ?? 0) : hits.some(hit => hit.row.id === row.id) ? Math.max(0, at - 90) : 0;
++            return { ...row, text: safePrefix(row.text ?? "", 200), attachment: safePrefix(row.attachment ?? "", 200),
++                prepared: { text: safePrefix(prepared.text.slice(offset), 1600), evidence: prepared.evidence, totalChars: prepared.text.length, offset, matchAt: at } };
++        });
++        return { rows: compactRows, matchIds: hits.map(h => h.row.id), neighbors, corrections, tailId: actualTail?.id,
++            archiveMatches, missingArchiveBlocks, revision, complete: this.source !== null, mode: this.fts ? "fts" : "scan", stats: { indexed, loaded: rows.size, matched, elapsedMs: performance.now() - started } };
++    }
++}
+diff --git a/src/storage/search-index-journal.ts b/src/storage/search-index-journal.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..22d9817a342589a62de69eee15001677c704e8c6
+--- /dev/null
++++ b/src/storage/search-index-journal.ts
+@@ -0,0 +1,53 @@
++import { randomUUID } from "node:crypto";
++import type { SqliteDatabase } from "./driver.js";
++
++const names = ["search_index_mi", "search_index_md", "search_index_mu", "search_index_ci", "search_index_cu", "search_index_cd"];
++const change = (owner: string, seq: string) => `
++ INSERT INTO search_index_versions VALUES (${owner},1) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++ INSERT INTO search_index_dirty SELECT ${owner},${seq},revision FROM search_index_versions WHERE session_id=${owner}
++ ON CONFLICT(session_id,seq) DO UPDATE SET revision=excluded.revision;`;
++
++/** Only the owning connection installs these small transactional change markers.
++ * The worker never writes the source DB (including WAL checkpoints). */
++export class SearchIndexJournal {
++    private schema = -1;
++    constructor(private db: SqliteDatabase) {}
++    ensure(): void {
++        const schema = Number((this.db.prepare("PRAGMA schema_version").get() as { schema_version: number }).schema_version);
++        if (schema === this.schema && this.db.prepare("SELECT 1 FROM search_index_meta WHERE id=1").get()) return;
++        this.db.transaction(() => {
++            this.db.exec(`CREATE TABLE IF NOT EXISTS search_index_meta (id INTEGER PRIMARY KEY CHECK(id=1), generation TEXT NOT NULL);
++CREATE TABLE IF NOT EXISTS search_index_versions (session_id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
++CREATE TABLE IF NOT EXISTS search_index_dirty (session_id TEXT NOT NULL,seq INTEGER NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(session_id,seq));
++CREATE INDEX IF NOT EXISTS search_index_dirty_revision ON search_index_dirty(session_id,revision);`);
++            const present = new Set((this.db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'search_index_%'").all() as { name: string }[]).map(r => r.name));
++            const repaired = names.some(n => !present.has(n)) || !this.db.prepare("SELECT generation FROM search_index_meta WHERE id=1").get();
++            if (repaired) {
++                // A missing journal trigger can hide a mutation; invalidate the derived DB.
++                this.db.prepare("INSERT INTO search_index_meta VALUES(1,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation").run(randomUUID());
++            }
++            this.db.exec(`
++CREATE TRIGGER IF NOT EXISTS search_index_mi AFTER INSERT ON messages BEGIN ${change("NEW.session_id", "NEW.seq")} END;
++CREATE TRIGGER IF NOT EXISTS search_index_md AFTER DELETE ON messages BEGIN ${change("OLD.session_id", "OLD.seq")} END;
++CREATE TRIGGER IF NOT EXISTS search_index_mu AFTER UPDATE OF session_id,seq,msg_id,role,kind,content_hash,retired_at ON messages
++ WHEN OLD.session_id IS NOT NEW.session_id OR OLD.seq IS NOT NEW.seq OR OLD.msg_id IS NOT NEW.msg_id OR OLD.role IS NOT NEW.role OR OLD.kind IS NOT NEW.kind OR OLD.content_hash IS NOT NEW.content_hash OR OLD.retired_at IS NOT NEW.retired_at BEGIN
++ ${change("OLD.session_id", "OLD.seq")} ${change("NEW.session_id", "NEW.seq")} END;
++CREATE TRIGGER IF NOT EXISTS search_index_cu AFTER UPDATE OF bytes ON content WHEN OLD.bytes IS NOT NEW.bytes BEGIN
++ INSERT INTO search_index_versions SELECT DISTINCT session_id,1 FROM messages WHERE content_hash=NEW.hash ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++ INSERT INTO search_index_dirty SELECT m.session_id,m.seq,v.revision FROM messages m JOIN search_index_versions v ON v.session_id=m.session_id WHERE m.content_hash=NEW.hash
++ ON CONFLICT(session_id,seq) DO UPDATE SET revision=excluded.revision;
++END;
++CREATE TRIGGER IF NOT EXISTS search_index_ci AFTER INSERT ON content BEGIN
++ INSERT INTO search_index_versions SELECT DISTINCT session_id,1 FROM messages WHERE content_hash=NEW.hash ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++ INSERT INTO search_index_dirty SELECT m.session_id,m.seq,v.revision FROM messages m JOIN search_index_versions v ON v.session_id=m.session_id WHERE m.content_hash=NEW.hash
++ ON CONFLICT(session_id,seq) DO UPDATE SET revision=excluded.revision;
++END;
++CREATE TRIGGER IF NOT EXISTS search_index_cd BEFORE DELETE ON content BEGIN
++ INSERT INTO search_index_versions SELECT DISTINCT session_id,1 FROM messages WHERE content_hash=OLD.hash ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++ INSERT INTO search_index_dirty SELECT m.session_id,m.seq,v.revision FROM messages m JOIN search_index_versions v ON v.session_id=m.session_id WHERE m.content_hash=OLD.hash
++ ON CONFLICT(session_id,seq) DO UPDATE SET revision=excluded.revision;
++END;`);
++        });
++        this.schema = Number((this.db.prepare("PRAGMA schema_version").get() as { schema_version: number }).schema_version);
++    }
++}
+diff --git a/src/storage/search-index-types.ts b/src/storage/search-index-types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..76d5ae5d677eb047c693344234b8287220ca6dbb
+--- /dev/null
++++ b/src/storage/search-index-types.ts
+@@ -0,0 +1,38 @@
++import type { SearchTranscriptRow } from "./store.js";
++
++export interface SearchIndexRow extends SearchTranscriptRow {
++    seq: number;
++    prepared?: { text: string; evidence: string; totalChars: number; offset: number; matchAt?: number };
++}
++export interface SearchIndexOptions {
++    overlays?: SearchTranscriptRow[];
++    excludeIds?: string[];
++    allowedIds?: string[];
++    contextIds?: string[];
++    summaries?: { id: string; block: string; text: string }[];
++    archives?: { id: string; block: string; text: string; coveredIds?: string[] }[];
++    archiveCoverage?: { block: string; ids: string[] }[];
++    overlayReset?: boolean;
++    overlayRemovedIds?: string[];
++    overlayOrderIds?: string[];
++    summaryReset?: boolean;
++    summaryRemovedIds?: string[];
++    summaryOrderIds?: string[];
++    archiveReset?: boolean;
++    archiveRemovedIds?: string[];
++    archiveOrderIds?: string[];
++    discardSessions?: string[];
++}
++export interface SearchIndexResult {
++    rows: SearchIndexRow[];
++    matchIds: string[];
++    neighbors: Record<string, { previous?: string; next?: string }>;
++    corrections: Record<string, string[]>;
++    tailId?: string;
++    archiveMatches?: string[];
++    missingArchiveBlocks?: string[];
++    revision: number;
++    complete: boolean;
++    mode: "fts" | "scan";
++    stats: { indexed: number; loaded: number; matched: number; elapsedMs: number };
++}
+diff --git a/src/storage/search-index-worker.ts b/src/storage/search-index-worker.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..06304a121a3e8f35daf6a55f1f022f0f5ca4cd60
+--- /dev/null
++++ b/src/storage/search-index-worker.ts
+@@ -0,0 +1,10 @@
++import { parentPort, workerData } from "node:worker_threads";
++import { SearchIndexEngine } from "./search-index-engine.js";
++import type { SearchIndexOptions } from "./search-index-types.js";
++
++const engine = new SearchIndexEngine(workerData.path ?? null);
++parentPort!.on("message", (request: { id: number; sessionId: string; query: string; limit: number; options?: SearchIndexOptions }) => {
++    try { parentPort!.postMessage({ id: request.id, result: engine.query(request.sessionId, request.query, request.limit, request.options) }); }
++    catch { parentPort!.postMessage({ id: request.id, error: "History search index unavailable; retry or rebuild the derived index" }); }
++});
++parentPort!.on("close", () => engine.close());
 diff --git a/src/storage/search-transcript-cache.ts b/src/storage/search-transcript-cache.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..5cdfc7ef5a8707e4d1d1d9552fa99a4a59494a35
@@ -1385,13 +2271,19 @@ index 0000000000000000000000000000000000000000..5cdfc7ef5a8707e4d1d1d9552fa99a4a
 +    stats() { return { ...this.cache.stats(), hits: this.hits, loads: this.loads }; }
 +}
 diff --git a/src/storage/shadow.ts b/src/storage/shadow.ts
-index aec7da44eb14d223d916d72c909411b309dd1586..592abc022111d65f17c96c08d589df5a95ddc0ac 100644
+index aec7da44eb14d223d916d72c909411b309dd1586..f1f5c9ae600a55a5c55c21c50d52c3e1e71a7d1f 100644
 --- a/src/storage/shadow.ts
 +++ b/src/storage/shadow.ts
-@@ -769,6 +769,12 @@ export class UnifiedShadow {
+@@ -769,6 +769,18 @@ export class UnifiedShadow {
          return this.sync.uncoveredRows(sessionId, intervals);
      }
  
++    async indexedSearch(sessionId: string, query: string, limit: number, options?: import("./search-index-types.js").SearchIndexOptions) {
++        if (!this.sync) return null;
++        this.assertLive();
++        return this.sync.indexedSearch(sessionId, query, limit, options);
++    }
++
 +    searchableTranscript(sessionId: string) {
 +        if (!this.sync) return [];
 +        this.assertLive();
@@ -1402,18 +2294,21 @@ index aec7da44eb14d223d916d72c909411b309dd1586..592abc022111d65f17c96c08d589df5a
          if (this.sync === null) return [];
          this.assertLive();
 diff --git a/src/storage/store.ts b/src/storage/store.ts
-index 0cab41538d5f0fdc495006c015d36c85e99f50af..47b1d9cfdbdb878f39f4d7ba7c11f52c24605d07 100644
+index 0cab41538d5f0fdc495006c015d36c85e99f50af..d14dbd4a0cb9291c77413bcb5443392c7b233b3e 100644
 --- a/src/storage/store.ts
 +++ b/src/storage/store.ts
-@@ -27,6 +27,7 @@ import { recordIntegrityOutcome, recordSecondProcessOwner, recordBackupOutcome }
+@@ -27,6 +27,10 @@ import { recordIntegrityOutcome, recordSecondProcessOwner, recordBackupOutcome }
  import { integrityModeFor, writeIntegrityCache, scheduleBackgroundIntegrityCheck, backgroundIntegrityInflightForTests, noteIntegrityCheckRun } from "./integrity-check.js";
  import { listInstances, type RegistryEntry } from "../instance.js";
  import type { MessageContentStore } from "acp-kernel";
 +import { SearchTranscriptCache } from "./search-transcript-cache.js";
++import { SearchIndexJournal } from "./search-index-journal.js";
++import { SearchIndexClient } from "./search-index-client.js";
++import type { SearchIndexOptions } from "./search-index-types.js";
  
  /** #3250: run a PASSIVE wal_checkpoint every N successful ingests. The
   *  built-in autocheckpoint alone cannot guarantee reclamation in a long-lived
-@@ -87,6 +88,11 @@ export interface SessionRow {
+@@ -87,6 +91,11 @@ export interface SessionRow {
      orphansJson?: string | null;
  }
  
@@ -1425,35 +2320,51 @@ index 0cab41538d5f0fdc495006c015d36c85e99f50af..47b1d9cfdbdb878f39f4d7ba7c11f52c
  export interface MessageRow {
      seq: number;
      msgId: string;
-@@ -339,6 +345,7 @@ export class UnifiedStore {
+@@ -339,6 +348,9 @@ export class UnifiedStore {
      /** Where the engine came from (#2833): builtin / host / self-downloaded — logged at enable so field diagnosis can tell which acquisition path a lane ran on. */
      readonly engineSource: SqliteEngineSource;
      private readonly db: SqliteDatabase;
 +    private readonly searchTranscriptCache: SearchTranscriptCache;
++    private readonly searchIndexJournal: SearchIndexJournal;
++    private searchIndexClient?: SearchIndexClient;
      /** #3250: successful-ingest counter driving the WAL_CHECKPOINT_EVERY_INGESTS cadence. */
      private ingestCount = 0;
      /** #4175: the live foreign pid found holding <db>.lock at open, if any. */
-@@ -353,6 +360,7 @@ export class UnifiedStore {
+@@ -353,6 +365,8 @@ export class UnifiedStore {
  
      private constructor(db: SqliteDatabase, engine: SqliteEngineName, engineSource: SqliteEngineSource, lockPath: string | null, foreignLockHolder: { pid: number } | null, dbPath: string) {
          this.db = db;
 +        this.searchTranscriptCache = new SearchTranscriptCache(db);
++        this.searchIndexJournal = new SearchIndexJournal(db);
          this.engine = engine;
          this.engineSource = engineSource;
          this.lockPath = lockPath;
-@@ -492,6 +500,7 @@ export class UnifiedStore {
+@@ -492,6 +506,8 @@ export class UnifiedStore {
      }
  
      close(): void {
 +        this.searchTranscriptCache.clear();
++        void this.closeSearchIndex();
          // #3250: converge the WAL before releasing the handle so a clean exit
          // leaves nothing for the next boot's recovery to replay. Same isolation
          // as open(): a checkpoint hiccup logs and never throws — callers treat
-@@ -1437,6 +1446,26 @@ export class UnifiedStore {
+@@ -1437,6 +1453,38 @@ export class UnifiedStore {
       *  so "gone from the window" must not read as "gone". Unknown refs simply
       *  come back absent; retired rows (rewound/undo history) stay excluded,
       *  matching every other view-lane reader. */
 +    /** Text-only projection for own-session keyword recall. Media CAS bytes are never hydrated. */
++    async indexedSearch(sessionId: string, query: string, limit: number, options?: SearchIndexOptions) {
++        try {
++            this.searchIndexJournal.ensure();
++            this.searchIndexClient ??= new SearchIndexClient(this.dbPath);
++            return await this.searchIndexClient.query(sessionId, query, limit, options);
++        } catch { return null; }
++    }
++
++    async closeSearchIndex(): Promise<void> {
++        await this.searchIndexClient?.close();
++    }
++
 +    searchableTranscript(sessionId: string): SearchTranscriptRow[] {
 +        return this.searchTranscriptCache.read(sessionId, () => this.db.prepare(`
 +            SELECT m.msg_id AS id, m.role, m.kind AS contentType,
@@ -1477,9 +2388,18 @@ index 0cab41538d5f0fdc495006c015d36c85e99f50af..47b1d9cfdbdb878f39f4d7ba7c11f52c
          if (refNums.length === 0) return [];
          const nums = [...new Set(refNums)];
 diff --git a/src/stream.ts b/src/stream.ts
-index f32641fc9bc393e6aabaf8b087b630908a789f39..94a64f5ed6921d49bbbb41a33f943189ff12965d 100644
+index f32641fc9bc393e6aabaf8b087b630908a789f39..f8025ddeb13315853339bd5778eb67f6991378ff 100644
 --- a/src/stream.ts
 +++ b/src/stream.ts
+@@ -5,7 +5,7 @@ import { handleAcpCache, prefixTokensBeforeRef, recordCacheFoldsFromBlocks } fro
+ import { type Session, cacheBlockContent, markDirty, residentPressure, scrubTurnSeparatorIds, statusInputBaseline } from "./session.js";
+ import { COMPRESS_TOOL_NAME, parseCompressInput, ABSORB_TOOL_NAME, type ParsedRange } from "./compress-tool.js";
+ import { effectiveAbsorbConfig, executeAbsorb, isProxyToolFor } from "./absorb.js";
+-import { executeSearchContextTarget, resolveDecompress } from "./decompress-shared.js";
++import { executeSearchContextTarget, executeSearchContextTargetAsync, resolveDecompress } from "./decompress-shared.js";
+ import { ONE_CALL_HINT } from "acp-kernel";
+ import { adoptContentStore, contentStoreOf, ccrEnabled, drainPendingRetrievals, executeRetrieve, retrieveToolName } from "./store.js";
+ import { recordThreadTail } from "./server/thread-tracking.js";
 @@ -21,6 +21,7 @@ import { applyConfiguredCompression } from "./external-summary-compress.js";
  import { describeUncoveredRuns, shortTokenCount, uncoveredHistoryRuns } from "./uncovered.js";
  
@@ -1488,6 +2408,14 @@ index f32641fc9bc393e6aabaf8b087b630908a789f39..94a64f5ed6921d49bbbb41a33f943189
      core: CompressionCore;
      config: Config;
      messages: CoreMessage[];
+@@ -1475,6 +1476,7 @@ export function rewriteJsonResponse(body: unknown, ctx: RewriteCtx): unknown {
+ export async function rewriteJsonResponseAsync(body: unknown, ctx: RewriteCtx, signal?: AbortSignal): Promise<unknown> {
+     return runJsonRewriteAsync(rewriteJsonSteps(body, ctx), async (call) => call.name === COMPRESS_TOOL_NAME
+         ? (await applyConfiguredCompression(call.args, ctx, call.id, signal)).text
++        : call.name === "search_context" ? (await executeSearchContextTargetAsync(call.args as Record<string, unknown>, ctx.core, ctx.session.id, ctx.session.state, ctx)).text
+         : executeAnthropicProxyTool(call.name, call.args as Record<string, unknown>, ctx).text);
+ }
+ 
 diff --git a/src/thirdparty-scan.ts b/src/thirdparty-scan.ts
 index 6fc46fce44c542d4b24f6d8bb97a3e5113d52f01..57e0c306735c247331942d58afdf59dd63628cdd 100644
 --- a/src/thirdparty-scan.ts
@@ -1501,6 +2429,22 @@ index 6fc46fce44c542d4b24f6d8bb97a3e5113d52f01..57e0c306735c247331942d58afdf59dd
      // pi terminal extension: folds tool output / re-lays AssistantMessage rendering,
      // registers display toggles; README states "changes display only" — no context
      // replacement or compression handler (#2324).
+diff --git a/tests/check-dist-external.test.ts b/tests/check-dist-external.test.ts
+index 60a06a6285427c85b753a7991659825fee11209b..d18986eabc7ef3c03c5f8c3b633e5e38291a5db7 100644
+--- a/tests/check-dist-external.test.ts
++++ b/tests/check-dist-external.test.ts
+@@ -60,6 +60,11 @@ test("node builtins (with and without node: prefix) are clean", () => {
+     assert.equal(clean.length, 0);
+ });
+ 
++test("prefix-only SQLite builtin stays distinct from the bare sqlite package", () => {
++    assert.equal(findExternalRefs('import{DatabaseSync}from"node:sqlite";').length, 0);
++    assert.equal(findExternalRefs('import{DatabaseSync}from"sqlite";')[0]?.spec, "sqlite");
++});
++
+ test("an unknown new package fails in every form (no silent new externals)", () => {
+     for (const text of [
+         'import{a}from"left-pad";',
 diff --git a/tests/collaborative-transaction.test.ts b/tests/collaborative-transaction.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..67046fc84630a5ebcd26a8cc34658d3eee44df06
@@ -1957,6 +2901,891 @@ index 0000000000000000000000000000000000000000..f451de856cc7c6930180a45e5348231b
 + cache.set("a","too large",71);assert.equal(cache.get("a"),undefined);assert.deepEqual(cache.stats(),{entries:1,bytes:30});
 + cache.clear();assert.deepEqual(cache.stats(),{entries:0,bytes:0});
 +});
+diff --git a/tests/search-fts-acceptance.test.ts b/tests/search-fts-acceptance.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3899255e1f6091bfc59be660fd7c71df15cd87c1
+--- /dev/null
++++ b/tests/search-fts-acceptance.test.ts
+@@ -0,0 +1,69 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { createCore, defaultConfig, type CoreMessage } from "acp-kernel";
++import { executeSearchContextTargetAsync } from "../src/decompress-shared.js";
++import type { SearchIndexOptions } from "../src/storage/search-index-types.js";
++import { makeLongFixture, probes } from "./search-long-fixture.js";
++
++test("production indexed search retains Chinese names, literal parameters, fresh overlays and source-page identity", async t => {
++    const f = makeLongFixture(500);
++    t.after(() => f.close());
++    const core = createCore();
++    const ctx = {
++        session: f.session, config: defaultConfig(200_000), messages: [] as CoreMessage[], log: () => {},
++        searchIndex: (sid: string, query: string, limit: number, options?: SearchIndexOptions) => f.store.indexedSearch(sid, query, limit, options),
++    };
++    const run = async (query: string) => (await executeSearchContextTargetAsync({ query, limit: 5 }, core, f.session.id, f.session.state, ctx)).text;
++    for (const probe of probes) {
++        const result = await run(probe.query);
++        assert.ok(result.includes(probe.id), `missing source for ${probe.query}`);
++        assert.ok(result.includes(probe.quote), `missing exact text for ${probe.query}`);
++    }
++    const hit = await run("RecentTokens");
++    const handle = hit.match(/read: (open:ev-[a-f0-9]+:\d+)/)?.[1];
++    assert.ok(handle);
++    assert.match(await run(handle), /preserveRecentTokens=32000/);
++    f.update(290, "preserveRecentTokens=48000，修改后的当前版本。");
++    assert.match(await run(handle), /unavailable or changed/);
++    assert.match(await run("RecentTokens"), /preserveRecentTokens=48000/);
++
++    const fresh: CoreMessage = { id: "live-latest", role: "user", contentType: "text", text: "青枔刚发来这条：rendererBudget=5137，尚未持久化。" };
++    ctx.messages = [fresh]; f.session.lastMessages = [fresh];
++    assert.match(await run("rendererBudget"), /live-latest[\s\S]*rendererBudget=5137/);
++    assert.match(await run("青枔"), /青枔刚发来这条/);
++
++    ctx.messages = [{ id: "history-120", role: "user", contentType: "text", text: "岑舒现在改用绿色文件夹。" }];
++    f.session.lastMessages = ctx.messages;
++    assert.match(await run("岑舒"), /绿色文件夹/);
++    assert.doesNotMatch(await run("蓝色文件夹"), /岑舒把窗台画放进蓝色文件夹/);
++    ctx.messages = []; f.session.lastMessages = [];
++    const oldNameText = f.readText(120), newNameText = oldNameText.replace("蓝色文件夹", "红色文件夹");
++    assert.equal(oldNameText.length, newNameText.length);
++    f.update(120, newNameText);
++    assert.match(await run("岑舒"), /红色文件夹/);
++    assert.doesNotMatch(await run("岑舒"), /蓝色文件夹/);
++    f.erase(155);
++    assert.doesNotMatch(await run("青枔想周末再看展览"), /history-155/);
++    f.retire(280);
++    assert.doesNotMatch(await run("autoFoldTargetTokens"), /history-280/);
++    f.insert(501, "新增琴弦资料已经写入，初次建库后也必须能找到。", f.writer);
++    assert.match(await run("琴弦"), /history-501/);
++});
++
++test("indexed tool search excludes reasoning, system content and secrets while retaining public attachment descriptions", async t => {
++    const f = makeLongFixture(500); t.after(() => f.close());
++    f.insert(501, "never-visible-reasoning", f.writer, { role: "assistant", contentType: "reasoning" });
++    f.insert(502, "never-visible-system", f.writer, { role: "system" });
++    f.insert(503, "public-auth-record token=synthetic___123456789", f.writer);
++    f.insert(504, "[image]", f.writer, { role: "tool", attachment: { description: "紫色窗格图像说明" } });
++    const core = createCore(), ctx = {
++        session: f.session, config: defaultConfig(200_000), messages: [] as CoreMessage[], log: () => {},
++        searchIndex: (sid: string, query: string, limit: number, options?: SearchIndexOptions) => f.store.indexedSearch(sid, query, limit, options),
++    };
++    const run = async (query: string) => (await executeSearchContextTargetAsync({ query, limit: 5 }, core, f.session.id, f.session.state, ctx)).text;
++    assert.doesNotMatch(await run("never-visible"), /history-501|history-502/);
++    assert.doesNotMatch(await run("synthetic___123456789"), /history-503/);
++    const publicHit = await run("public-auth-record");
++    assert.match(publicHit, /history-503/); assert.doesNotMatch(publicHit, /synthetic___123456789/);
++    assert.match(await run("紫色窗格"), /history-504[\s\S]*紫色窗格图像说明/);
++});
+diff --git a/tests/search-index-dist.test.ts b/tests/search-index-dist.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d33d900a1dc0d779bc58684f150252727b1f100
+--- /dev/null
++++ b/tests/search-index-dist.test.ts
+@@ -0,0 +1,81 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import path from "node:path";
++import os from "node:os";
++import http from "node:http";
++import net from "node:net";
++import { spawn } from "node:child_process";
++import { once } from "node:events";
++
++const dist = path.resolve(import.meta.dirname, "../dist/index.js");
++const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
++
++test("built CLI searches Chinese names, parameters and fresh messages through its packaged worker", { skip: !fs.existsSync(dist), timeout: 60000 }, async () => {
++    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bili-search-dist-"));
++    const upstream = http.createServer((req, res) => {
++        req.resume(); req.on("end", () => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({
++            id: "isolated-reply", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ready" }, finish_reason: "stop" }],
++            usage: { prompt_tokens: 200, completion_tokens: 1, total_tokens: 201 },
++        })); });
++    });
++    upstream.listen(0, "127.0.0.1"); await once(upstream, "listening");
++    const upstreamPort = (upstream.address() as net.AddressInfo).port;
++    // CLI requires a nonzero port. Reserve an OS-assigned port briefly and read
++    // the actual listening port from the child; startup collisions fail visibly.
++    const reservation = net.createServer(); reservation.listen(0, "127.0.0.1"); await once(reservation, "listening");
++    const port = (reservation.address() as net.AddressInfo).port;
++    await new Promise<void>(resolve => reservation.close(() => resolve()));
++    const config = path.join(dir, "config.json");
++    fs.writeFileSync(config, JSON.stringify({ port, host: "127.0.0.1", upstream: `http://127.0.0.1:${upstreamPort}`,
++        modelContextLimit: 400000, routes: { [`http://127.0.0.1:${upstreamPort}`]: { models: { "fts-dist-test": { context: 400000 } } } },
++        autoUpdate: false, advisoryCheck: false, releaseNotesCheck: false, autoRestartOnUpdate: false,
++        persist: { enabled: true, debounceMs: 0 }, storage: { unified: "full" },
++        compress: { injectTool: true, injectNudge: false, autoFold: false }, mitm: { enabled: false, domains: [] },
++    }));
++    const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "test", BILI_CONFIG_FILE: config, BILI_SESSIONS_DIR: path.join(dir, "sessions"),
++        BILI_PERSIST: "1", BILI_PERSIST_DEBOUNCE_MS: "0", BILI_STORAGE_UNIFIED: "full", BILI_ADVISORY_CHECK: "0",
++        XDG_CONFIG_HOME: path.join(dir, "config"), XDG_DATA_HOME: path.join(dir, "data"), XDG_CACHE_HOME: path.join(dir, "cache"), XDG_STATE_HOME: path.join(dir, "state"),
++        NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" };
++    delete env.ACP_PORT; delete env.ACP_UPSTREAM; delete env.BILI_UPSTREAM_PROXY;
++    const child = spawn(process.execPath, [dist, "start", "--config", config], { cwd: dir, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
++    let output = "";
++    child.stdout.on("data", chunk => { output += String(chunk); });
++    child.stderr.on("data", chunk => { output += String(chunk); });
++    try {
++        let origin: string | undefined;
++        for (let i = 0; i < 300 && child.exitCode === null; i++) {
++            const ready = output.match(/listening on (http:\/\/127\.0\.0\.1:\d+)/);
++            if (ready) { origin = ready[1]; break; }
++            await delay(50);
++        }
++        assert.ok(origin, `built CLI did not start: ${output.slice(-2000)}`);
++        const conversationId = "isolated-built-search";
++        const response = await fetch(`${origin}/bili/http://127.0.0.1:${upstreamPort}/v1/chat/completions`, {
++            method: "POST", headers: { "content-type": "application/json", "x-bili-plugin": "test-agent", "x-bili-plugin-conversation": conversationId, "x-acp-session": conversationId },
++            body: JSON.stringify({ model: "fts-dist-test", max_tokens: 64000, messages: [
++                { role: "user", content: "岑舒喜欢温热的茶。参数 preserveRecentTokens=12000，文件 E:/isolated/settings.json。" },
++                { role: "assistant", content: "记住了。" }, { role: "user", content: "青枔刚发送了这条消息：新消息标记即刻可查。" },
++            ] }), signal: AbortSignal.timeout(20000),
++        });
++        assert.equal(response.status, 200, await response.text());
++        for (const query of ["岑舒", "青枔", "preserveRecentTokens=12000", "新消息标记即刻可查"]) {
++            const res = await fetch(`${origin}/__bili/plugin/tool`, { method: "POST", headers: { "content-type": "application/json" },
++                body: JSON.stringify({ conversationId, tool: "search_context", args: { query } }), signal: AbortSignal.timeout(20000) });
++            const body = await res.json() as { ok?: boolean; result?: string; error?: string };
++            assert.equal(res.status, 200, JSON.stringify(body));
++            assert.equal(body.ok, true, JSON.stringify(body));
++            assert.ok(body.result?.includes(query), `${query}: ${body.result ?? body.error}`);
++            assert.match(body.result!, /indexed keyword search/);
++            assert.doesNotMatch(body.result!, /temporarily unavailable/);
++        }
++        assert.doesNotMatch(output, /Packaged history search worker is missing|worker stopped before completing|worker-error/);
++    } finally {
++        if (child.exitCode === null) {
++            child.kill(); await Promise.race([once(child, "exit"), delay(5000)]);
++            if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await once(child, "exit"); }
++        }
++        upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
++        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
++    }
++});
+diff --git a/tests/search-index-integration.test.ts b/tests/search-index-integration.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad03ea856086e0676b97917b2913c1245f1473d8
+--- /dev/null
++++ b/tests/search-index-integration.test.ts
+@@ -0,0 +1,251 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { buildStoredPlaceholder, createCore, createInitialState, defaultConfig, type CoreMessage, type MessageContentStore } from "acp-kernel";
++import { executeSearchContextTargetAsync } from "../src/decompress-shared.js";
++import { renderIndexedEvidence, searchEvidenceIndexed, type EvidenceIndexQuery } from "../src/search-evidence.js";
++import { prepareSearchText } from "../src/search-text.js";
++import type { SearchIndexOptions, SearchIndexResult } from "../src/storage/search-index-types.js";
++import type { Session } from "../src/session.js";
++import { SessionStore, _setStoreForTest } from "../src/persist.js";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { SearchIndexClient } from "../src/storage/search-index-client.js";
++import { UnifiedStore } from "../src/storage/store.js";
++import type { SqliteDatabase } from "../src/storage/driver.js";
++import { SearchIndexJournal } from "../src/storage/search-index-journal.js";
++import type { Worker } from "node:worker_threads";
++
++_setStoreForTest(new SessionStore({ enabled: false }));
++
++const message = (id: string, text: string, role: CoreMessage["role"] = "user"): CoreMessage => ({ id, text, role, contentType: "text" });
++function session(id = "isolated-search-integration"): Session {
++    return { id, state: createInitialState(), metadata: {}, stats: {}, blockContents: new Map(), lastMessages: [] } as unknown as Session;
++}
++function result(rows: SearchIndexResult["rows"] = [], matchIds: string[] = rows.map(r => r.id)): SearchIndexResult {
++    return { rows, matchIds, neighbors: {}, corrections: {}, revision: 1, complete: true, mode: "fts", stats: { indexed: rows.length, loaded: rows.length, matched: matchIds.length, elapsedMs: 1 } };
++}
++
++test("production async search sends authoritative fresh overlays and keeps text containing a box emoji", async () => {
++    const s = session();
++    s.lastMessages = [message("changed", "old words"), message("erase", "old body"), message("box", "📦 岑舒刚收到一箱书")];
++    const current = [message("changed", "青枔刚改成 preserveRecentTokens=12000"), message("erase", ""), { ...message("private", "private"), contentType: "reasoning" } as CoreMessage];
++    let input: SearchIndexOptions | undefined;
++    const query: EvidenceIndexQuery = async (_sid, q, _limit, opts) => {
++        input = opts;
++        const rows = (opts?.overlays ?? []).filter(r => r.contentType !== "reasoning" && r.text?.includes(q)).map((r, seq) => ({ ...r, seq }));
++        return result(rows);
++    };
++    const out = await executeSearchContextTargetAsync({ query: "青枔" }, createCore(), s.id, s.state,
++        { session: s, config: defaultConfig(200000), messages: current, log() {}, searchIndex: query });
++    assert.match(out.text, /青枔刚改成 preserveRecentTokens=12000/);
++    assert.equal(input?.overlays?.find(r => r.id === "changed")?.text, current[0]!.text);
++    assert.equal(input?.overlays?.find(r => r.id === "erase")?.text, "", "empty edits remove the old searchable body");
++    assert.ok(input?.excludeIds?.includes("private"), "a new private role cannot resurrect an older searchable copy");
++    assert.ok(input?.overlays?.some(r => r.id === "box"));
++});
++
++test("fresh current text wins over stale CCR; only canonical placeholders expand from CCR", async () => {
++    const s = session();
++    s.state.messageRefs.byRaw["a"] = "m00001";
++    const ccr = { version: 1, byRef: { m00001: { rawId: "a", hash: "h" } }, byHash: { h: "stale CCR original" } } as unknown as MessageContentStore;
++    let input: SearchIndexOptions | undefined;
++    const query: EvidenceIndexQuery = async (_sid, _q, _limit, opts) => { input = opts; return result(); };
++    await searchEvidenceIndexed(s, "fresh", 2, [message("a", "fresh latest edit")], query, ccr);
++    assert.equal(input?.overlays?.[0]?.text, "fresh latest edit");
++    const placeholder = buildStoredPlaceholder({ ref: "m00001", kind: "tool", tokens: 4000, retrieveToolName: "acp_retrieve", head: "preview" });
++    await searchEvidenceIndexed(s, "original", 2, [message("a", placeholder, "tool")], query, ccr);
++    assert.equal(input?.overlays?.[0]?.text, "stale CCR original");
++    await searchEvidenceIndexed(s, "original", 2, [message("a", placeholder, "tool")], query);
++    assert.deepEqual(input?.excludeIds, [], "a carrier without resident original must not hide stored evidence");
++});
++
++test("sparse candidates render true neighbors and corrections, never candidate adjacency", () => {
++    const s = session();
++    const data = result([
++        { ...message("old", "岑舒 target"), seq: 1 }, { ...message("far", "岑舒 another target"), seq: 200 },
++        { ...message("neighbor", "real next message"), seq: 2 },
++        { ...message("correction", "Actually use 12000"), seq: 300, corrects: "old" },
++    ], ["old", "far"]);
++    data.neighbors.old = { next: "neighbor" };
++    data.corrections.old = ["correction"];
++    const text = renderIndexedEvidence(s, "岑舒", 2, data);
++    assert.match(text, /next: neighbor/);
++    assert.doesNotMatch(text, /next: far|previous: old/);
++    assert.match(text, /explicitly corrected by correction/);
++    const key = prepareSearchText(s.id, "old", "岑舒 target").evidence;
++    assert.match(renderIndexedEvidence(s, "open:" + key, 2, data), /岑舒 target/);
++    assert.match(renderIndexedEvidence(session("other"), "open:" + key, 2, data), /unavailable or changed/);
++});
++
++test("worker excerpts preserve full-body handles and page offsets without rehashing the truncated row", () => {
++    const s = session(), full = "历史".repeat(3000) + "岑舒 and autoFoldTargetTokens=80000";
++    const prepared = prepareSearchText(s.id, "large", full);
++    const offset = 5800;
++    const data = result([{ ...message("large", full.slice(0, 200)), seq: 1,
++        prepared: { text: full.slice(offset, offset + 1600), evidence: prepared.evidence, offset, totalChars: full.length, matchAt: 6000 } }]);
++    const hit = renderIndexedEvidence(s, "岑舒", 1, data);
++    assert.match(hit, new RegExp(`read: open:${prepared.evidence}:${offset}`));
++    assert.match(hit, /岑舒 and autoFoldTargetTokens=80000/);
++    assert.match(renderIndexedEvidence(s, `open:${prepared.evidence}:${offset}`, 1, data), /岑舒 and autoFoldTargetTokens=80000/);
++    assert.match(renderIndexedEvidence(s, `open:${prepared.evidence}:1600`, 1, data), /page changed/);
++});
++
++test("complete indexed coverage never hydrates lazy original block archives", async () => {
++    const s = session();
++    s.state.blocks = [{ blockId: "b1", active: true, tier: 1, effectiveMessageIds: ["old"], topic: "topic", summary: "summary" }] as Session["state"]["blocks"];
++    s.blockContents = { get() { throw new Error("legacy archive must stay lazy"); } } as unknown as Session["blockContents"];
++    let calls = 0;
++    const query: EvidenceIndexQuery = async (_sid, _q, _limit, opts) => {
++        calls++;
++        assert.deepEqual(opts?.archiveCoverage, [{ block: "b1", ids: ["old"] }]);
++        assert.equal(opts?.archives, undefined);
++        return { ...result(), missingArchiveBlocks: [] };
++    };
++    await searchEvidenceIndexed(s, "none", 2, [], query);
++    assert.equal(calls, 1);
++});
++
++test("only legacy blocks explicitly missing typed records are expanded for worker search", async () => {
++    const s = session();
++    s.state.blocks = ["b1", "b2"].map(blockId => ({ blockId, active: true, tier: 1, effectiveMessageIds: [blockId + "-old"] })) as Session["state"]["blocks"];
++    const reads: string[] = [];
++    s.blockContents = { get(id: string) { reads.push(id); return { full: { text: "legacy 岑舒" } }; } } as unknown as Session["blockContents"];
++    let calls = 0;
++    const query: EvidenceIndexQuery = async (_sid, _q, _limit, opts) => {
++        calls++;
++        if (calls === 1) return { ...result(), missingArchiveBlocks: ["b2"] };
++        assert.deepEqual(opts?.archives?.map(a => a.block), ["b2"]);
++        return { ...result(), archiveMatches: ["b2"] };
++    };
++    const text = await searchEvidenceIndexed(s, "岑舒", 2, [], query);
++    assert.deepEqual(reads, ["b2"]);
++    assert.match(text, /b2 \[flattened archive locator/);
++});
++
++test("unavailable index is explicit and foreign session never receives current originals", async () => {
++    const s = session();
++    const ctx = { session: s, config: defaultConfig(200000), messages: [message("private", "青枔 private")], log() {}, searchIndex: async () => null };
++    const unavailable = await executeSearchContextTargetAsync({ query: "青枔" }, createCore(), s.id, s.state, ctx);
++    assert.match(unavailable.text, /temporarily unavailable/);
++    assert.doesNotMatch(unavailable.text, /no.*matched/i);
++    let called = false;
++    const foreign = await executeSearchContextTargetAsync({ query: "青枔", conversation_id: "unknown-other-session" }, createCore(), s.id, s.state,
++        { ...ctx, searchIndex: async () => { called = true; return result(); } });
++    assert.equal(called, false);
++    assert.match(foreign.text, /unknown session/);
++    assert.doesNotMatch(foreign.text, /青枔 private/);
++});
++
++test("full resident histories transfer only changed bodies while new messages and in-place edits stay authoritative", async () => {
++    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bili-resident-search-"));
++    const file = path.join(dir, "source.sqlite"), owner = UnifiedStore.open(file), client = new SearchIndexClient(file);
++    const db = (owner as unknown as { db: SqliteDatabase }).db;
++    new SearchIndexJournal(db).ensure();
++    const s = session("isolated-full-resident");
++    s.lastMessages = Array.from({ length: 600 }, (_, i) => message("r" + i, `记录${i}：` + "普通历史内容。".repeat(50)));
++    s.lastMessages[10]!.text = "岑舒原来的参数 preserveRecentTokens=64000";
++    s.lastMessages[20]!.text = "青枔提过温热的茶";
++    try {
++        const content = db.prepare("INSERT INTO content(hash,byte_len,bytes) VALUES(?,?,?)");
++        const msg = db.prepare("INSERT INTO messages(session_id,seq,msg_id,role,kind,content_hash) VALUES(?,?,?,?,?,?)");
++        db.exec("BEGIN");
++        for (const [i, row] of s.lastMessages.entries()) {
++            const bytes = Buffer.from(JSON.stringify(row)), hash = "fixture-" + i;
++            content.run(hash, bytes.length, bytes); msg.run(s.id, i, row.id, row.role, row.contentType, hash);
++        }
++        db.exec("COMMIT");
++        const query: EvidenceIndexQuery = (...args) => client.query(...args);
++        const search = (q: string) => executeSearchContextTargetAsync({ query: q }, createCore(), s.id, s.state,
++            { session: s, config: defaultConfig(200000), messages: [], log() {}, searchIndex: query });
++        assert.match((await search("岑舒")).text, /preserveRecentTokens=64000/);
++        const first = client.diagnostics();
++        assert.equal(first.overlayRows, 600);
++        // Wire adapters may recreate each field object even when bodies did not
++        // change; object identity alone cannot make transport incremental.
++        s.lastMessages = s.lastMessages.map(row => ({ ...row }));
++        assert.match((await search("青枔")).text, /温热的茶/);
++        assert.equal(client.diagnostics().overlayRows, first.overlayRows);
++        assert.equal(client.diagnostics().overlayChars, first.overlayChars);
++        s.lastMessages[10]!.text = "岑舒更正参数 preserveRecentTokens=12000";
++        s.lastMessages.push(message("new", "青枔刚发送的 unique-latest-message"));
++        assert.match((await search("unique-latest-message")).text, /青枔刚发送/);
++        assert.equal(client.diagnostics().overlayRows, first.overlayRows + 2);
++        assert.doesNotMatch((await search("preserveRecentTokens=64000")).text, /indexed keyword search/);
++        assert.match((await search("preserveRecentTokens=12000")).text, /岑舒更正参数/);
++        s.lastMessages.pop();
++        assert.doesNotMatch((await search("unique-latest-message")).text, /indexed keyword search/);
++        s.lastMessages[10]!.contentType = "reasoning";
++        assert.doesNotMatch((await search("preserveRecentTokens")).text, /indexed keyword search/);
++        assert.equal(client.diagnostics().overlayRows, first.overlayRows + 3);
++    } finally {
++        await client.close(); owner.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
++    }
++});
++
++test("legacy archive and inactive summary transport reuse bodies across the coverage-first query", async () => {
++    const client = new SearchIndexClient(null);
++    const summaries = [{ id: "summary/b1", block: "b1", text: "inactive 岑舒 summary" }];
++    const archives = [{ id: "archive/b2", block: "b2", text: "legacy 青枔 original", coveredIds: ["missing"] }];
++    try {
++        await client.query("isolated-transfer", "岑舒", 5, { summaries, archives });
++        const first = client.diagnostics();
++        await client.query("isolated-transfer", "青枔", 5, { summaries });
++        const full = await client.query("isolated-transfer", "青枔", 5, { summaries: summaries.map(row => ({ ...row })), archives: archives.map(row => ({ ...row, coveredIds: [...row.coveredIds] })) });
++        assert.deepEqual(full?.archiveMatches, ["b2"]);
++        assert.equal(client.diagnostics().summaryRows, first.summaryRows);
++        assert.equal(client.diagnostics().archiveRows, first.archiveRows);
++        archives[0]!.text = "legacy new-name original";
++        const changed = await client.query("isolated-transfer", "青枔", 5, { summaries, archives });
++        assert.deepEqual(changed?.archiveMatches, []);
++        assert.equal(client.diagnostics().archiveRows, first.archiveRows + 1);
++        const removed = await client.query("isolated-transfer", "new-name", 5, { summaries, archiveCoverage: [] });
++        assert.deepEqual(removed?.archiveMatches, [], "deleted legacy blocks must not survive in the transport cache");
++    } finally { await client.close(); }
++});
++
++test("a failed base transfer makes an already queued search resend fresh overlays", async () => {
++    const client = new SearchIndexClient(null);
++    try {
++        await client.query("isolated-failed-transfer", "old", 3, { overlays: [message("one", "old")] });
++        const worker = (client as unknown as { worker: Worker }).worker;
++        const post = worker.postMessage.bind(worker);
++        let failOnce = true;
++        worker.postMessage = (payload: { id: number }) => {
++            if (failOnce) {
++                failOnce = false;
++                // Simulate a source-lock failure before the engine sees the
++                // changed overlay; no body is ever delivered to this worker.
++                queueMicrotask(() => worker.emit("message", { id: payload.id, error: "source temporarily busy" }));
++            } else post(payload);
++        };
++        const options = { overlays: [message("one", "青枔 just-changed")] };
++        const failed = client.query("isolated-failed-transfer", "just-changed", 3, options);
++        const queued = client.query("isolated-failed-transfer", "just-changed", 3, options);
++        assert.equal(await failed, null);
++        assert.deepEqual((await queued)?.matchIds, ["one"]);
++        assert.equal(client.diagnostics().overlayRows, 3, "failed delta must be resent instead of treated as acknowledged");
++    } finally { await client.close(); }
++});
++
++test("disabled persistence still searches fresh messages and labels historical coverage incomplete", async () => {
++    const s = session("isolated-no-persist");
++    const out = await executeSearchContextTargetAsync({ query: "青枔" }, createCore(), s.id, s.state,
++        { session: s, config: defaultConfig(200000), messages: [message("fresh", "青枔刚发来的消息")], log() {} });
++    assert.match(out.text, /青枔刚发来的消息/);
++    assert.match(out.text, /coverage is incomplete/);
++});
++
++test("evicting resident transfer sessions forces a new base instead of reusing a missing snapshot", async () => {
++    const client = new SearchIndexClient(null);
++    try {
++        for (let i = 0; i < 17; i++) {
++            const out = await client.query("isolated-eviction-" + i, "青枔", 1, { overlays: [message("fresh", "青枔 " + i)] });
++            assert.deepEqual(out?.matchIds, ["fresh"]);
++        }
++        assert.equal(client.diagnostics().residentSessions, 16);
++        const again = await client.query("isolated-eviction-0", "青枔", 1, { overlays: [message("fresh", "青枔 0")] });
++        assert.deepEqual(again?.matchIds, ["fresh"]);
++        assert.equal(client.diagnostics().overlayRows, 18);
++    } finally { await client.close(); }
++});
+diff --git a/tests/search-index.test.ts b/tests/search-index.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7721426238b4f30b238ff789e57dee8e492c9013
+--- /dev/null
++++ b/tests/search-index.test.ts
+@@ -0,0 +1,183 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { DatabaseSync } from "node:sqlite";
++import { UnifiedStore } from "../src/storage/store.js";
++import { openSqliteDatabase, type SqliteDatabase } from "../src/storage/driver.js";
++import { SearchIndexClient } from "../src/storage/search-index-client.js";
++import { prepareSearchText } from "../src/search-text.js";
++import type { Worker } from "node:worker_threads";
++
++function fixture(t: { after: (fn: () => Promise<void>) => void }) {
++    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bili-search-index-")), file = path.join(dir, "index.db");
++    let store = UnifiedStore.open(file);
++    const db = (store as unknown as { db: SqliteDatabase }).db;
++    const other = openSqliteDatabase(file).db;
++    t.after(async () => { await store.closeSearchIndex(); other.close(); store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
++    let sequence = 0;
++    const add = (session: string, seq: number, text: string, rest: Record<string, unknown> = {}, writer = db) => {
++        const value = { text, ...rest }, raw = JSON.stringify(value), hash = "content-" + ++sequence;
++        writer.prepare("INSERT INTO content(hash,byte_len,bytes) VALUES(?,?,?)").run(hash, Buffer.byteLength(raw), Buffer.from(raw));
++        writer.prepare("INSERT INTO messages(session_id,seq,msg_id,ref,role,kind,content_hash) VALUES(?,?,?,?,?,?,?)")
++            .run(session, seq, rest.id ?? "m" + seq, "m" + String(seq).padStart(5, "0"), rest.role ?? "user", rest.contentType ?? "text", hash);
++        return hash;
++    };
++    return { dir, file, db, other, add, get store() { return store; }, async reopen() { await store.closeSearchIndex(); store.close(); store = UnifiedStore.open(file); return store; } };
++}
++
++test("worker FTS finds two-character names, literal parameters and unsaved messages with bounded evidence pages", async t => {
++    const f = fixture(t);
++    f.add("one", 1, "岑舒今天喝温热的茶 preserveRecentTokens=64000 --max-output /tmp/a_b.json 90%");
++    f.add("one", 2, "青枔确认了参数，留待晚上继续");
++    f.add("other", 1, "岑舒的其他会话不可见");
++    for (const query of ["岑舒", "青枔", "温热", "热", "Recent", "64000", "90%", "--max-output", "/tmp/a_b.json"]) {
++        const result = await f.store.indexedSearch("one", query, 5);
++        assert.ok(result); assert.equal(result.mode, "fts"); assert.ok(result.matchIds.length, query);
++        assert.doesNotMatch(JSON.stringify(result), /其他会话/);
++    }
++    const fresh = await f.store.indexedSearch("one", "刚刚", 5, { overlays: [{ id: "fresh", role: "user", contentType: "text", text: "青枔刚刚发送的新消息" }] });
++    assert.deepEqual(fresh?.matchIds, ["fresh"]); assert.equal(fresh?.neighbors.fresh?.previous, "m2");
++    const huge = "古籍资料".repeat(50000) + "needle-late-ending";
++    f.add("one", 3, huge);
++    const hit = await f.store.indexedSearch("one", "needle-late-ending", 3);
++    const row = hit?.rows.find(r => r.id === "m3"); assert.ok(row?.prepared);
++    assert.ok(row.prepared.text.length <= 1600); assert.ok((row.text?.length ?? 0) <= 200);
++    assert.ok(row.prepared.totalChars > 200000); assert.match(row.prepared.text, /needle-late-ending/);
++    const opened = await f.store.indexedSearch("one", "open:" + row.prepared.evidence + ":0", 3);
++    assert.equal(opened?.rows.find(r => r.id === "m3")?.prepared?.offset, 0);
++    assert.equal(opened?.rows.find(r => r.id === "m3")?.prepared?.text.length, 1600);
++});
++
++test("incremental index observes same-length CAS edits, deletion, retirement and content restoration from other connections", async t => {
++    const f = fixture(t), hash = f.add("one", 1, "needleA 岑舒");
++    assert.deepEqual((await f.store.indexedSearch("one", "needleA", 5))?.matchIds, ["m1"]);
++    assert.equal((await f.store.indexedSearch("one", "needleA", 5))?.stats.indexed, 0);
++    const raw = JSON.stringify({ text: "needleB 青枔" });
++    f.other.prepare("UPDATE content SET bytes=? WHERE hash=?").run(Buffer.from(raw), hash);
++    const changed = await f.store.indexedSearch("one", "needleB", 5);
++    assert.deepEqual(changed?.matchIds, ["m1"]); assert.equal(changed?.stats.indexed, 1);
++    assert.deepEqual((await f.store.indexedSearch("one", "needleA", 5))?.matchIds, []);
++    f.other.prepare("UPDATE messages SET retired_at=1 WHERE session_id='one'").run();
++    assert.deepEqual((await f.store.indexedSearch("one", "needleB", 5))?.matchIds, []);
++    f.other.prepare("UPDATE messages SET retired_at=NULL WHERE session_id='one'").run();
++    assert.deepEqual((await f.store.indexedSearch("one", "needleB", 5))?.matchIds, ["m1"]);
++    f.other.exec("PRAGMA foreign_keys=OFF");
++    f.other.prepare("DELETE FROM content WHERE hash=?").run(hash);
++    assert.deepEqual((await f.store.indexedSearch("one", "needleB", 5))?.matchIds, []);
++    f.other.prepare("INSERT INTO content(hash,byte_len,bytes) VALUES(?,?,?)").run(hash, raw.length, Buffer.from(raw));
++    assert.deepEqual((await f.store.indexedSearch("one", "needleB", 5))?.matchIds, ["m1"]);
++    f.other.prepare("DELETE FROM messages WHERE session_id='one'").run();
++    assert.deepEqual((await f.store.indexedSearch("one", "needleB", 5))?.matchIds, []);
++});
++
++test("source journal repair rebuilds the disposable index and canonical SQLite bytes are never edited by worker", async t => {
++    const f = fixture(t), hash = f.add("one", 1, "old-marker");
++    await f.store.indexedSearch("one", "old-marker", 5);
++    f.other.exec("DROP TRIGGER search_index_cu");
++    f.other.prepare("UPDATE content SET bytes=? WHERE hash=?").run(Buffer.from(JSON.stringify({ text: "new-marker" })), hash);
++    assert.deepEqual((await f.store.indexedSearch("one", "new-marker", 5))?.matchIds, ["m1"]);
++    const before = f.other.prepare("SELECT hex(bytes) AS bytes FROM content WHERE hash=?").get(hash);
++    for (let n = 0; n < 3; n++) await f.store.indexedSearch("one", "marker", 5);
++    assert.deepEqual(f.other.prepare("SELECT hex(bytes) AS bytes FROM content WHERE hash=?").get(hash), before);
++    assert.ok(fs.existsSync(f.file + ".search.sqlite"));
++    f.other.exec("DELETE FROM search_index_meta");
++    assert.deepEqual((await f.store.indexedSearch("one", "new-marker", 5))?.matchIds, ["m1"]);
++});
++
++test("index removes secrets and malformed metadata cannot block valid neighbors, corrections or attachments", async t => {
++    const f = fixture(t);
++    f.add("one", 1, "baseline needle token=abcdef__123456789", { source: { kind: "user" }, timestamp: 123 });
++    f.add("one", 2, "correction now", { corrects: "m00001", attachment: { description: "蓝窗附件" } });
++    f.add("one", 3, "valid after malformed", { attachment: { description: { secret: "private malformed object" } }, toolName: { secret: "hidden-object" } });
++    f.add("one", 4, "private thought", { role: "assistant", contentType: "reasoning" });
++    const hit = await f.store.indexedSearch("one", "needle", 5);
++    assert.deepEqual(hit?.corrections.m1, ["m2"]); assert.equal(hit?.neighbors.m1?.next, "m2");
++    assert.doesNotMatch(JSON.stringify(hit), /abcdef__123456789/);
++    assert.deepEqual((await f.store.indexedSearch("one", "蓝窗", 5))?.matchIds, ["m2"]);
++    assert.deepEqual((await f.store.indexedSearch("one", "valid", 5))?.matchIds, ["m3"]);
++    assert.deepEqual((await f.store.indexedSearch("one", "private", 5))?.matchIds, []);
++    const sidecar = new DatabaseSync(f.file + ".search.sqlite", { readOnly: true });
++    assert.doesNotMatch(JSON.stringify(sidecar.prepare("SELECT body,data,shorts FROM docs").all()), /abcdef__123456789|hidden-object|private thought/); sidecar.close();
++});
++
++test("overlay exclusion, block scopes, summaries and original-evidence handles retain strict provenance", async t => {
++    const f = fixture(t); f.add("one", 1, "old word"); f.add("one", 2, "old word second");
++    const hit = await f.store.indexedSearch("one", "old", 5); const ev = hit!.rows.find(r => r.id === "m1")!.prepared!.evidence;
++    const options = { overlays: [{ id: "m1", role: "user", contentType: "text", text: "new word" }], excludedIds: [] };
++    assert.deepEqual((await f.store.indexedSearch("one", "old", 5, options))?.matchIds, ["m2"]);
++    assert.deepEqual((await f.store.indexedSearch("one", "open:" + ev, 5, options))?.matchIds, []);
++    assert.deepEqual((await f.store.indexedSearch("two", "open:" + ev, 5))?.matchIds, []);
++    assert.deepEqual((await f.store.indexedSearch("one", "old", 5, { allowedIds: ["m1"] }))?.matchIds, ["m1"]);
++    assert.deepEqual((await f.store.indexedSearch("one", "old", 5, { overlays: [{ id: "m1", role: "assistant", contentType: "reasoning", text: "new" }] }))?.matchIds, ["m2"]);
++    const summary = { id: "summary/b1", block: "b1", text: "archived summary needle" };
++    const result = await f.store.indexedSearch("one", "needle", 5, { summaries: [summary], archiveCoverage: [{ block: "b1", ids: ["m1", "m2"] }, { block: "b2", ids: ["missing"] }] });
++    assert.deepEqual(result?.matchIds, [summary.id]); assert.deepEqual(result?.missingArchiveBlocks, ["b2"]);
++    const prepared = prepareSearchText("one", summary.id, summary.text);
++    assert.deepEqual((await f.store.indexedSearch("one", "open:" + prepared.evidence, 5, { summaries: [summary] }))?.matchIds, [summary.id]);
++});
++
++test("worker close settles pending work and a fresh owner can reuse the durable index", async t => {
++    const f = fixture(t); f.add("one", 1, "岑舒 durable");
++    await f.store.indexedSearch("one", "岑舒", 5);
++    const reopened = await f.reopen();
++    const reused = await reopened.indexedSearch("one", "岑舒", 5); assert.equal(reused?.stats.indexed, 0); assert.deepEqual(reused?.matchIds, ["m1"]);
++    const client = new SearchIndexClient(null);
++    const pending = client.query("x", "needle", 5, { overlays: [{ id: "x", role: "user", contentType: "text", text: "needle" }] });
++    await client.close(); assert.equal(await pending, null);
++    assert.equal(await client.query("x", "needle", 5), null);
++});
++
++test("a late exit from an old worker cannot settle the replacement worker's requests", async () => {
++    const client = new SearchIndexClient(null);
++    const options = { overlays: [{ id: "fresh", role: "user", contentType: "text", text: "岑舒" }] };
++    assert.deepEqual((await client.query("one", "岑舒", 5, options))?.matchIds, ["fresh"]);
++    const internals = client as unknown as { worker: Worker; stop: (final: boolean) => Promise<void> };
++    const oldWorker = internals.worker;
++    const stopping = internals.stop(false);
++    const pending = client.query("one", "岑舒", 5, options);
++    oldWorker.emit("exit", 1);
++    assert.deepEqual((await pending)?.matchIds, ["fresh"]);
++    await stopping; await client.close();
++});
++
++test("corrupt disposable index is rebuilt without changing canonical history", async t => {
++    const f = fixture(t), hash = f.add("one", 1, "岑舒 original-safe");
++    await f.store.indexedSearch("one", "岑舒", 5);
++    await f.store.closeSearchIndex();
++    fs.writeFileSync(f.file + ".search.sqlite", "not a sqlite database");
++    await f.reopen();
++    const restored = await f.store.indexedSearch("one", "original-safe", 5);
++    assert.deepEqual(restored?.matchIds, ["m1"]);
++    assert.match(String((f.other.prepare("SELECT CAST(bytes AS TEXT) AS text FROM content WHERE hash=?").get(hash) as { text: string }).text), /岑舒 original-safe/);
++    assert.ok(fs.readdirSync(f.dir).some(name => name.includes(".search.sqlite.corrupt-")));
++});
++
++test("unchanged resident copies do not resurrect externally corrected or deleted canonical rows", async t => {
++    const f = fixture(t), hash = f.add("one", 1, "old-word 岑舒");
++    const options = { overlays: [{ id: "m1", role: "user", contentType: "text", text: "old-word 岑舒" }] };
++    assert.deepEqual((await f.store.indexedSearch("one", "old-word", 5, options))?.matchIds, ["m1"]);
++    f.other.prepare("UPDATE content SET bytes=? WHERE hash=?").run(Buffer.from(JSON.stringify({ text: "new-word 岑舒" })), hash);
++    assert.deepEqual((await f.store.indexedSearch("one", "old-word", 5, options))?.matchIds, []);
++    assert.deepEqual((await f.store.indexedSearch("one", "new-word", 5, options))?.matchIds, ["m1"]);
++    f.other.prepare("DELETE FROM messages WHERE session_id='one'").run();
++    assert.deepEqual((await f.store.indexedSearch("one", "old-word", 5, options))?.matchIds, []);
++    options.overlays[0]!.text = "explicit-new 岑舒";
++    assert.deepEqual((await f.store.indexedSearch("one", "explicit-new", 5, options))?.matchIds, ["m1"]);
++});
++
++test("neighbors and correction relations ignore older live rows sharing a stable message ID", async t => {
++    const f = fixture(t);
++    f.add("one", 1, "real previous");
++    f.add("one", 2, "old duplicate version", { id: "duplicate" });
++    f.add("one", 3, "岑舒 newest unique-hit", { id: "duplicate" });
++    f.add("one", 4, "old superseded correction", { id: "correction", corrects: "duplicate" });
++    f.add("one", 5, "real next");
++    f.add("one", 6, "new correction for a different source", { id: "correction", corrects: "elsewhere" });
++    const result = await f.store.indexedSearch("one", "unique-hit", 5);
++    assert.deepEqual(result?.matchIds, ["duplicate"]);
++    assert.deepEqual(result?.neighbors.duplicate, { previous: "m1", next: "m5" });
++    assert.deepEqual(result?.corrections.duplicate, []);
++    assert.doesNotMatch(JSON.stringify(result), /old duplicate version|old superseded correction/);
++});
+diff --git a/tests/search-long-benchmark.ts b/tests/search-long-benchmark.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..fee5edb996db0b9cb6ebfa7783ff7ecbc3c0585d
+--- /dev/null
++++ b/tests/search-long-benchmark.ts
+@@ -0,0 +1,143 @@
++import assert from "node:assert/strict";
++import { writeFileSync, statSync } from "node:fs";
++import { cpus, platform, release } from "node:os";
++import { createCore, defaultConfig, type CoreMessage } from "acp-kernel";
++import { executeSearchContextTargetAsync } from "../src/decompress-shared.js";
++import { searchEvidence } from "../src/search-evidence.js";
++import type { SearchIndexOptions, SearchIndexResult } from "../src/storage/search-index-types.js";
++import { makeLongFixture, probes, timingSummary, withHeartbeat } from "./search-long-fixture.js";
++
++const rowsArg = process.argv.indexOf("--rows"), outArg = process.argv.indexOf("--out");
++const count = rowsArg >= 0 ? Number(process.argv[rowsArg + 1]) : 20_000;
++if (!Number.isSafeInteger(count) || count < 500 || count > 200_000) throw new Error("--rows must be 500–200000");
++const outPath = outArg >= 0 ? process.argv[outArg + 1] : undefined;
++const fixtureStart = performance.now(), f = makeLongFixture(count), fixtureMs = performance.now() - fixtureStart;
++const originalCharacters = f.sourceCharacters, originalBytes = f.sourceBytes;
++const queryCases = [...probes, { query: "资料", id: `history-${count}`, quote: "资料" }, { query: "整理 页码", id: `history-${count}`, quote: "页码" }];
++let lastIndex: SearchIndexResult | null = null;
++const latestStats = () => lastIndex?.stats;
++const latestMode = () => lastIndex?.mode;
++type TransportDiagnostics = { overlayRows: number; overlayChars: number; summaryRows: number; archiveRows: number; residentEstimatedBytes: number; transferBudgetBytes: number };
++// Read the real store-owned transport counters without creating a second worker.
++const transport = () => (Reflect.get(f.store, "searchIndexClient") as { diagnostics(): TransportDiagnostics } | undefined)?.diagnostics();
++const queryIndex = async (sid: string, query: string, limit: number, options?: SearchIndexOptions) => {
++    lastIndex = await f.store.indexedSearch(sid, query, limit, options);
++    return lastIndex;
++};
++const ctx = { session: f.session, config: defaultConfig(200_000), messages: [] as CoreMessage[], log: () => {}, searchIndex: queryIndex };
++const core = createCore();
++const indexed = async (query: string) => {
++    const result = await executeSearchContextTargetAsync({ query, limit: 5 }, core, f.session.id, f.session.state, ctx);
++    assert.equal(latestMode(), "fts", `indexed benchmark unexpectedly fell back for ${query}`);
++    return result.text;
++};
++const baseline = (query: string) => searchEvidence(f.session, query, 5, ctx.messages, f.store.searchableTranscript(f.session.id));
++const elapsed = async (fn: () => Promise<string> | string) => { const at = performance.now(); const text = await fn(); return { text, ms: performance.now() - at }; };
++const sizes = () => Object.fromEntries([
++    ["source", ""], ["sourceWal", "-wal"], ["index", ".search.sqlite"], ["indexWal", ".search.sqlite-wal"],
++].map(([name, suffix]) => { try { return [name!, statSync(f.file + suffix).size]; } catch { return [name!, 0]; } }));
++try {
++    const oldCold = await withHeartbeat(() => baseline(probes[0].query));
++    assert.ok(oldCold.result.includes(probes[0].quote));
++    const newCold = await withHeartbeat(() => indexed(probes[0].query));
++    assert.ok(newCold.result.includes(probes[0].quote));
++    assert.equal(latestMode(), "fts", "benchmark must exercise the FTS index rather than fallback scanning");
++    const coldStats = latestStats();
++    const baselineTimes: number[] = [], indexedTimes: number[] = [], cases: object[] = [];
++    for (let round = 0; round < 3; round++) for (const probe of queryCases) {
++        const a = await elapsed(() => baseline(probe.query));
++        const b = await elapsed(() => indexed(probe.query));
++        assert.ok(a.text.includes(probe.quote), `baseline lost ${probe.query}`);
++        assert.ok(b.text.includes(probe.quote), `indexed lost ${probe.query}`);
++        assert.ok(a.text.includes(probe.id) && b.text.includes(probe.id), `message identity mismatch for ${probe.query}`);
++        baselineTimes.push(a.ms); indexedTimes.push(b.ms);
++        if (!round) cases.push({ query: probe.query, sourceId: probe.id, baselineFound: true, indexedFound: true, indexStats: latestStats() });
++    }
++    const hotHeartbeat = await withHeartbeat(async () => { for (const probe of queryCases) await indexed(probe.query); return queryCases.length; });
++    const fullResident: CoreMessage[] = f.store.searchableTranscript(f.session.id).map(row => ({
++        id: row.id, role: row.role as CoreMessage["role"], contentType: row.contentType as CoreMessage["contentType"], text: row.text ?? "",
++    }));
++    f.session.lastMessages = fullResident;
++    const transportBefore = transport()!;
++    const activeFirst = await withHeartbeat(() => indexed(probes[0].query));
++    const transportAfterFirst = transport()!;
++    assert.ok(activeFirst.result.includes(probes[0].quote));
++    const activeBaselineTimes: number[] = [], activeIndexedTimes: number[] = [];
++    for (let round = 0; round < 2; round++) for (const probe of queryCases) {
++        const a = await elapsed(() => baseline(probe.query)), b = await elapsed(() => indexed(probe.query));
++        assert.ok(a.text.includes(probe.quote) && b.text.includes(probe.quote), `active resident recall lost ${probe.query}`);
++        activeBaselineTimes.push(a.ms); activeIndexedTimes.push(b.ms);
++    }
++    const activeHeartbeat = await withHeartbeat(async () => { for (const probe of queryCases) await indexed(probe.query); return queryCases.length; });
++    const transportAfterWarm = transport()!;
++    assert.equal(transportAfterWarm.overlayRows, transportAfterFirst.overlayRows, "unchanged complete resident history must not resend bodies");
++    assert.equal(transportAfterWarm.overlayChars, transportAfterFirst.overlayChars);
++    const mutable = fullResident.find(row => row.id === "history-120")!, beforeEdit = mutable.text;
++    mutable.text = "岑舒刚刚改变主意：保留银色文件夹。";
++    assert.match(await indexed("银色文件夹"), /history-120/);
++    assert.doesNotMatch(await indexed("蓝色文件夹"), /岑舒把窗台画放进蓝色文件夹/);
++    mutable.text = beforeEdit;
++    fullResident.push({ id: "active-just-sent", role: "user", contentType: "text", text: "活跃全量会话新来信：newLiveFlag=7391。" });
++    assert.match(await indexed("newLiveFlag"), /active-just-sent[\s\S]*newLiveFlag=7391/);
++    f.update(460, "外部正式版本已经修改：延迟回忆现在改为晚间考虑。");
++    assert.match(await indexed("延迟回忆"), /history-460[\s\S]*晚间考虑/);
++    assert.doesNotMatch(await indexed("延迟回忆"), /延迟回忆需要保留触发线索/);
++    f.erase(390);
++    assert.doesNotMatch(await indexed("2026-11-04"), /history-390/);
++    f.session.lastMessages = [];
++    const incremental: object[] = [];
++    for (let i = 0; i < 5; i++) {
++        const marker = `增量线索${i}青枔`, seq = count + i + 1;
++        f.insert(seq, `${marker}刚刚写入，原有历史不需要重新构建。`, f.writer);
++        const next = await elapsed(() => indexed(marker));
++        assert.ok(next.text.includes(marker));
++        incremental.push({ mutation: "append", sourceId: `history-${seq}`, elapsedMs: Number(next.ms.toFixed(2)), stats: latestStats() });
++    }
++    const oldNameText = f.readText(120), newNameText = oldNameText.replace("蓝色文件夹", "红色文件夹");
++    assert.equal(oldNameText.length, newNameText.length);
++    f.update(120, newNameText);
++    let found = await indexed("岑舒");
++    assert.ok(found.includes("红色文件夹")); assert.ok(!found.includes("蓝色文件夹"));
++    incremental.push({ mutation: "same-length external edit", correct: true, stats: latestStats() });
++    f.erase(155);
++    found = await indexed("青枔想周末再看展览");
++    assert.ok(!found.includes("history-155"));
++    incremental.push({ mutation: "external delete", correct: true, stats: latestStats() });
++    f.retire(280);
++    found = await indexed("autoFoldTargetTokens");
++    assert.ok(!found.includes("history-280"));
++    incremental.push({ mutation: "retirement", correct: true, stats: latestStats() });
++
++    ctx.messages = [{ id: "just-sent", role: "user", contentType: "text", text: "青枔刚发送：本轮新参数 pixelBudget=4096；尚未写入 SQLite。" }];
++    f.session.lastMessages = ctx.messages;
++    found = await indexed("pixelBudget");
++    assert.ok(found.includes("just-sent") && found.includes("pixelBudget=4096"));
++    const recent = { unpersistedMessageFound: true, query: "pixelBudget", stats: latestStats() };
++    ctx.messages = [{ id: "history-120", role: "user", contentType: "text", text: "岑舒已改口：现在用绿色文件夹。" }];
++    f.session.lastMessages = ctx.messages;
++    found = await indexed("岑舒");
++    assert.ok(found.includes("绿色文件夹")); assert.ok(!found.includes("红色文件夹"));
++    const overlay = { newerSameIdOverridesStored: true };
++    ctx.messages = []; f.session.lastMessages = [];
++    found = await indexed("RecentTokens");
++    const handle = found.match(/read: (open:ev-[a-f0-9]+:\d+)/)?.[1];
++    assert.ok(handle, "original evidence read handle must remain available");
++    assert.ok((await indexed(handle)).includes("preserveRecentTokens=32000"));
++    const open = { originalReadHandleWorks: true, stats: latestStats() };
++    f.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
++    const storage = sizes();
++    const cleanMetrics = <T>(data: { result: T; elapsedMs: number; heartbeatTicks: number; maxHeartbeatGapMs: number }) => ({ elapsedMs: data.elapsedMs, heartbeatTicks: data.heartbeatTicks, maxHeartbeatGapMs: data.maxHeartbeatGapMs });
++    const report = {
++        schema: "history-fts-benchmark-v1", generatedAt: new Date().toISOString(), syntheticOnly: true,
++        environment: { node: process.version, platform: platform(), osRelease: release(), cpu: cpus()[0]?.model, sqlite: f.db.prepare("SELECT sqlite_version() AS version").get() },
++        corpus: { rows: count, sourceCharacters: originalCharacters, sourceBytes: originalBytes, sourceDatabaseBytes: f.sourceDatabaseBytes, generationMs: Number(fixtureMs.toFixed(2)) },
++        oldCold: cleanMetrics(oldCold), newCold: { ...cleanMetrics(newCold), stats: coldStats },
++        hot: { baseline: timingSummary(baselineTimes), indexed: timingSummary(indexedTimes), workerHeartbeat: cleanMetrics(hotHeartbeat) },
++        activeFullHistory: { rows: fullResident.length - 1, firstOverlay: cleanMetrics(activeFirst), baseline: timingSummary(activeBaselineTimes), indexed: timingSummary(activeIndexedTimes), workerHeartbeat: cleanMetrics(activeHeartbeat), transportBefore, transportAfterFirst, transportAfterWarm, sameObjectEditFound: true, unpersistedAppendFound: true, canonicalEditOverridesUnchangedResident: true, canonicalDeleteOverridesUnchangedResident: true },
++        cases, incremental, recent, overlay, open, storage,
++        indexGrowthBytes: Number(storage.index) + Number(storage.indexWal),
++        limitations: ["Synthetic, single-machine wall-clock measurements; not a guaranteed speedup on every workload.", "Cold indexed search includes initial index construction; no remote model calls or formal memories were used.", "Legacy cache may not retain a corpus larger than its per-item capacity; the comparison exercises its actual current behavior."],
++    };
++    if (outPath) writeFileSync(outPath, JSON.stringify(report, null, 2) + "\n");
++    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
++} finally { await f.close(); }
+diff --git a/tests/search-long-fixture.ts b/tests/search-long-fixture.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ffe512aab9bb07876f0628e770da553e875bc363
+--- /dev/null
++++ b/tests/search-long-fixture.ts
+@@ -0,0 +1,122 @@
++import { createHash } from "node:crypto";
++import { mkdtempSync, rmSync, statSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join, resolve, sep } from "node:path";
++import { createInitialState, type CoreMessage } from "acp-kernel";
++import type { Session } from "../src/session.js";
++import { UnifiedStore } from "../src/storage/store.js";
++import { openSqliteDatabase, type SqliteDatabase } from "../src/storage/driver.js";
++
++export const longHistorySession = "fts-synthetic-long-history";
++export const probes = [
++    { query: "岑舒", id: "history-120", quote: "岑舒把窗台画放进蓝色文件夹" },
++    { query: "青枔", id: "history-155", quote: "青枔想周末再看展览" },
++    { query: "autoFoldTargetTokens", id: "history-280", quote: "autoFoldTargetTokens=80000" },
++    { query: "RecentTokens", id: "history-290", quote: "preserveRecentTokens=32000" },
++    { query: "90%", id: "history-310", quote: "硬性安全阈值90%" },
++    { query: "E:/workspace/config.json", id: "history-350", quote: "E:/workspace/config.json" },
++    { query: "2026-11-04", id: "history-390", quote: "检验日期2026-11-04" },
++    { query: "延迟回忆", id: "history-460", quote: "延迟回忆需要保留触发线索" },
++] as const;
++
++type SyntheticMessage = CoreMessage & {
++    timestamp?: number;
++    source?: { kind: string };
++    corrects?: string;
++    attachment?: { description: string };
++};
++
++export function makeLongFixture(count = 20_000) {
++    const dir = mkdtempSync(join(tmpdir(), "bili-fts-long-"));
++    const file = join(dir, "index.db");
++    const store = UnifiedStore.open(file);
++    const db = (store as unknown as { db: SqliteDatabase }).db;
++    const writer = openSqliteDatabase(file).db;
++    const insertContent = db.prepare("INSERT INTO content(hash,byte_len,bytes) VALUES (?,?,?)");
++    const insertMessage = db.prepare("INSERT INTO messages(session_id,seq,msg_id,role,kind,content_hash) VALUES (?,?,?,?,?,?)");
++    const state = createInitialState();
++    const session = { id: longHistorySession, state, metadata: {}, stats: {}, blockContents: new Map(), lastMessages: [] } as unknown as Session;
++    let sourceCharacters = 0, sourceBytes = 0;
++    const hashes = new Map<number, string>();
++    const insert = (seq: number, text: string, target = db, extra: Partial<SyntheticMessage> = {}) => {
++        const message: SyntheticMessage = {
++            id: `history-${seq}`, role: seq % 5 === 0 ? "tool" : seq % 2 === 0 ? "assistant" : "user",
++            contentType: "text", text, timestamp: 1_790_000_000_000 + seq * 60_000, source: { kind: "synthetic-benchmark" }, ...extra,
++        };
++        const raw = JSON.stringify(message), bytes = Buffer.from(raw), hash = createHash("sha256").update(raw).digest("hex");
++        if (target === db) {
++            insertContent.run(hash, bytes.length, bytes);
++            insertMessage.run(longHistorySession, seq, message.id, message.role, message.contentType, hash);
++        } else {
++            target.prepare("INSERT INTO content(hash,byte_len,bytes) VALUES (?,?,?)").run(hash, bytes.length, bytes);
++            target.prepare("INSERT INTO messages(session_id,seq,msg_id,role,kind,content_hash) VALUES (?,?,?,?,?,?)")
++                .run(longHistorySession, seq, message.id, message.role, message.contentType, hash);
++        }
++        hashes.set(seq, hash);
++        state.messageRefs.byRaw[message.id] = `m${String(seq).padStart(5, "0")}`;
++        sourceCharacters += text.length; sourceBytes += Buffer.byteLength(text);
++        return message;
++    };
++    const corpus = [
++        "工具返回的页面包含馆藏目录、照片说明、书籍索引和后续整理建议。每一条资料都保存出处，眼前展示的内容只作搜索测试。",
++        "整理扫描件时核对页码、纸张纹理与批注，记录尚未辨认的地名。完成这一步后再查看下一页，不把看起来相似的编号混为一谈。",
++        "The synthetic tool output lists document sections, image descriptions, versioned settings and reversible steps. This is generated benchmark data.",
++        "阅读日志保留动作已经完成还是仍待确认。发现新版本时先比较实际记录，旧摘要中的结论只用于定位，不代替原文。",
++    ];
++    for (let first = 1; first <= count; first += 250) db.transaction(() => {
++        for (let seq = first; seq < Math.min(first + 250, count + 1); seq++) {
++            const marker = probes.find(p => p.id === `history-${seq}`)?.quote ?? `普通合成条目 ${seq}，段落版本 ${(seq * 37) % 997}`;
++            const filler = Array.from({ length: 10 }, (_, part) => `${corpus[(seq + part) % corpus.length]} 区段${(seq * 17 + part * 19) % 10007}。`).join("\n");
++            insert(seq, `${marker}\n${filler}`);
++        }
++    });
++    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
++    const sourceDatabaseBytes = statSync(file).size;
++    const update = (seq: number, text: string) => {
++        const hash = hashes.get(seq);
++        if (!hash) throw new Error(`No fixture row ${seq}`);
++        const raw = writer.prepare("SELECT bytes FROM content WHERE hash=?").get(hash) as { bytes: Uint8Array };
++        const old = JSON.parse(Buffer.from(raw.bytes).toString("utf8")) as SyntheticMessage;
++        const bytes = Buffer.from(JSON.stringify({ ...old, text }));
++        writer.prepare("UPDATE content SET bytes=?,byte_len=? WHERE hash=?").run(bytes, bytes.length, hash);
++    };
++    return {
++        dir, file, db, store, writer, session, sourceDatabaseBytes, count,
++        get sourceCharacters() { return sourceCharacters; }, get sourceBytes() { return sourceBytes; },
++        insert, update,
++        readText(seq: number) {
++            const raw = writer.prepare("SELECT bytes FROM content WHERE hash=?").get(hashes.get(seq)) as { bytes: Uint8Array };
++            return (JSON.parse(Buffer.from(raw.bytes).toString("utf8")) as SyntheticMessage).text ?? "";
++        },
++        erase(seq: number) { writer.prepare("DELETE FROM messages WHERE session_id=? AND seq=?").run(longHistorySession, seq); },
++        retire(seq: number) { writer.prepare("UPDATE messages SET retired_at=42 WHERE session_id=? AND seq=?").run(longHistorySession, seq); },
++        async close(remove = true) {
++            writer.close(); await store.closeSearchIndex(); store.close();
++            if (!remove) return;
++            const absolute = resolve(dir), base = resolve(tmpdir()) + sep;
++            if (!absolute.startsWith(base) || !absolute.includes("bili-fts-long-")) throw new Error("Unexpected benchmark cleanup target");
++            for (let attempt = 0; attempt < 10; attempt++) {
++                try { rmSync(absolute, { recursive: true, force: true }); return; }
++                catch (error) { if (attempt === 9) throw error; await new Promise(r => setTimeout(r, 100)); }
++            }
++        },
++    };
++}
++
++export function timingSummary(values: number[]) {
++    const sorted = [...values].sort((a, b) => a - b);
++    const p = (q: number) => Number((sorted[Math.max(0, Math.ceil(q * sorted.length) - 1)] ?? 0).toFixed(2));
++    return { samples: values.length, p50Ms: p(0.5), p95Ms: p(0.95), maxMs: p(1) };
++}
++
++export async function withHeartbeat<T>(operation: () => Promise<T> | T) {
++    let ticks = 0, maxGap = 0, last = performance.now();
++    const start = last;
++    const timer = setInterval(() => { const now = performance.now(); ticks++; maxGap = Math.max(maxGap, now - last); last = now; }, 10);
++    try {
++        const result = await operation();
++        const elapsedMs = performance.now() - start;
++        await new Promise(r => setTimeout(r, 15));
++        return { result, elapsedMs: Number(elapsedMs.toFixed(2)), heartbeatTicks: ticks, maxHeartbeatGapMs: Number(maxGap.toFixed(2)) };
++    } finally { clearInterval(timer); }
++}
 diff --git a/tests/search-original-evidence.test.ts b/tests/search-original-evidence.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..14a9ce0d812743cf49584df9fd67c68e85c303ed
@@ -1996,16 +3825,46 @@ index 0000000000000000000000000000000000000000..14a9ce0d812743cf49584df9fd67c68e
 + session.id="other";assert.match(run(target),/unavailable or changed/);session.id="search-fixture-local";
 + session.lastMessages![0]!.text="new version";assert.match(run(target),/unavailable or changed/);
 +});
+diff --git a/tests/search-plan-aware.test.ts b/tests/search-plan-aware.test.ts
+index ea5bac1e3077c61ce649a701ec096ecb8570dc40..f64b980e18d798bb3a746c7e12f84e2d18691e49 100644
+--- a/tests/search-plan-aware.test.ts
++++ b/tests/search-plan-aware.test.ts
+@@ -193,7 +193,9 @@ test("own-session target entry point: flag off → plain; flag on → re-ranked"
+     const f = foldBlocks(true);
+     storeEffectiveSearchPlanAware(f.session, false);
+     const off = executeSearchContextTarget({ query: "token" }, f.core, f.session.id, f.session.state, { messages: planMessages(), config: f.config, session: f.session, log: () => {} }).text;
+-    assert.equal(off, executeSearchContext({ query: "token" }, f.core, f.session.state).text, "unflagged ctx → plain output");
++    assert.match(off, /Own-session historical evidence/, "original evidence remains available alongside block search");
++    const plain = executeSearchContext({ query: "token" }, f.core, f.session.state).text;
++    assert.ok(off.endsWith(plain), "unflagged ctx retains the exact plain block-search section");
+     storeEffectiveSearchPlanAware(f.session, true);
+     const on = executeSearchContextTarget({ query: "token" }, f.core, f.session.id, f.session.state, { messages: planMessages(), config: f.config, session: f.session, log: () => {} }).text;
+     assert.notEqual(on, off, "flagged ctx → re-ranked output");
 diff --git a/tsup.config.ts b/tsup.config.ts
-index f77884f5d942f20894822f4215f06eab549a8df9..fcd0b67e62961475838f00b83fcdfed9e65669d6 100644
+index f77884f5d942f20894822f4215f06eab549a8df9..13ca72d0a4f1648d7b1f7febff2abbd8ad233792 100644
 --- a/tsup.config.ts
 +++ b/tsup.config.ts
-@@ -4,7 +4,7 @@ import { defineConfig } from "tsup";
+@@ -4,10 +4,12 @@ import { defineConfig } from "tsup";
  
  export default [
  defineConfig({
 -    entry: ["src/index.ts", "src/mcp.ts", "src/claude-mcp-entry.ts", "src/claude-native-bootstrap.ts", "src/agent/pi.ts", "src/agent/pi-native.ts", "src/agent/omp.ts", "src/agent/omp-native.ts", "src/agent/opencode.ts", "src/agent/opencode-native.ts", "src/agent/dsh-acp.ts", "src/agent/dsh-native.ts", "src/agent/dsh-compaction-gate.ts", "src/kimi/native-mcp.ts", "src/kimi/bootstrap-hook.ts", "src/zcode/mcp-entry.ts", "src/zcode/bootstrap-hook.ts"],
-+    entry: ["src/external-summary-settings.ts", "src/index.ts", "src/mcp.ts", "src/claude-mcp-entry.ts", "src/claude-native-bootstrap.ts", "src/agent/pi.ts", "src/agent/pi-native.ts", "src/agent/omp.ts", "src/agent/omp-native.ts", "src/agent/opencode.ts", "src/agent/opencode-native.ts", "src/agent/dsh-acp.ts", "src/agent/dsh-native.ts", "src/agent/dsh-compaction-gate.ts", "src/kimi/native-mcp.ts", "src/kimi/bootstrap-hook.ts", "src/zcode/mcp-entry.ts", "src/zcode/bootstrap-hook.ts"],
++    entry: ["src/storage/search-index-worker.ts", "src/external-summary-settings.ts", "src/index.ts", "src/mcp.ts", "src/claude-mcp-entry.ts", "src/claude-native-bootstrap.ts", "src/agent/pi.ts", "src/agent/pi-native.ts", "src/agent/omp.ts", "src/agent/omp-native.ts", "src/agent/opencode.ts", "src/agent/opencode-native.ts", "src/agent/dsh-acp.ts", "src/agent/dsh-native.ts", "src/agent/dsh-compaction-gate.ts", "src/kimi/native-mcp.ts", "src/kimi/bootstrap-hook.ts", "src/zcode/mcp-entry.ts", "src/zcode/bootstrap-hook.ts"],
      format: ["esm"],
      target: "node20",
      platform: "node",
++    // Prefix-only builtins such as node:sqlite have no bare-package alias.
++    removeNodeProtocol: false,
+     // Non-minified esbuild output KEEPS JSDoc comments attached to class
+     // members (verified empirically against esbuild bundled with tsup 8.x):
+     // undici ships class-body JSDoc like `@param {import('./client.js')}` and
+@@ -21,6 +23,9 @@ defineConfig({
+     // the build if any relative import()/require() text ever reappears.
+     esbuildOptions(options) {
+         options.minifyWhitespace = true;
++        // node:sqlite is a prefix-only builtin. Do not rewrite it to the
++        // unrelated bare package "sqlite" when targeting the older base lane.
++        options.supported = { ...options.supported, "node-colon-prefix-import": true };
+         // #2186: billion-context-pi-subagents is inlined via noExternal, and
+         // its ONLY runtime host import is a namespace import of
+         // @earendil-works/pi-coding-agent (config-dir reads CONFIG_DIR_NAME,

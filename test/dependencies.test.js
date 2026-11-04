@@ -25,3 +25,8 @@ test('repository dependency lock can be installed without drift',()=>{
  const root=path.resolve(import.meta.dirname,'..'),result=checkDependencies(root);
  assert.ok(result.dependencies.includes('js-tiktoken@1.0.21'));
 });
+
+test('pinned SQLite supports the FTS5 trigram search index',()=>{
+ const root=path.resolve(import.meta.dirname,'..');
+ assert.equal(checkDependencies(root,{sqlite:true}).sqlite,'node:sqlite');
+});
