@@ -7860,9 +7860,18 @@ index 4f7a373f12fdfd1452ba64b178235a3b117894ee..e014079cc06d1d45742cb657760bbc37
  process.env.XDG_STATE_HOME = path.join(root, "state");
  process.env.XDG_CACHE_HOME = path.join(root, "cache");
 diff --git a/tests/search-context-cross-session.test.ts b/tests/search-context-cross-session.test.ts
-index 9a5647f4a276a2786456872fa117ece38708cb3d..7c3ad29fbc117827791b9615fbd6712bdfdc5d23 100644
+index 9a5647f4a276a2786456872fa117ece38708cb3d..993b8d686c87f677b47df1146b091fddeffa6d52 100644
 --- a/tests/search-context-cross-session.test.ts
 +++ b/tests/search-context-cross-session.test.ts
+@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
+ import { createHash } from "node:crypto";
+ import { ACP_READONLY_TOOLS_RESPONSES, ACP_TOOLS_ANTHROPIC, ACP_TOOLS_OPENAI, ACP_TOOLS_RESPONSES, DECOMPRESS_TOOL_NAME, SEARCH_CONTEXT_TOOL_NAME, createCore, createInitialState, defaultConfig } from "acp-kernel";
+ import { anthropicToCore, type AnthropicRequestBody } from "acp-kernel/wire";
+-import { BILI_ACP_READONLY_TOOLS_RESPONSES, BILI_ACP_TOOLS_ANTHROPIC, BILI_ACP_TOOLS_OPENAI, BILI_ACP_TOOLS_RESPONSES } from "../src/compress-tool.ts";
++import { BILI_ACP_READONLY_TOOLS_RESPONSES, BILI_ACP_TOOLS_ANTHROPIC, BILI_ACP_TOOLS_OPENAI, BILI_ACP_TOOLS_RESPONSES, LIST_CONTEXT_SESSIONS_TOOL_NAME } from "../src/compress-tool.ts";
+ import { SessionStore, _setStoreForTest } from "../src/persist.ts";
+ import { _resetSessionsForTest, getSession, type Session } from "../src/session.ts";
+ import { executeSearchContext, executeSearchContextTarget } from "../src/decompress-shared.ts";
 @@ -61,7 +61,7 @@ function paramsOf(entry: FlatTool): Record<string, unknown> {
      return entry.parameters ?? entry.input_schema ?? entry.function?.parameters ?? {};
  }
@@ -7882,7 +7891,15 @@ index 9a5647f4a276a2786456872fa117ece38708cb3d..7c3ad29fbc117827791b9615fbd6712b
          const required = paramsOf(entry).required as string[];
          assert.ok(!required.includes("conversation_id"), "conversation_id must stay out of required");
  
-@@ -112,7 +113,7 @@ test("#841 schema: BILI arrays no longer add conversation_id to search_context (
+@@ -107,12 +108,14 @@ test("#841 schema: BILI arrays no longer add conversation_id to search_context (
+         const decRequired = paramsOf(biliDec).required as string[] | undefined;
+         assert.ok(!decRequired?.includes("startId") && !decRequired?.includes("endId"), "range args must stay optional");
+ 
+-        const biliRest = bili.filter((t) => t !== entry && nameOf(t) !== DECOMPRESS_TOOL_NAME);
++        assert.equal(bili.filter((t) => nameOf(t) === LIST_CONTEXT_SESSIONS_TOOL_NAME).length, 1, "host directory must be registered once");
++        assert.ok(!kernel.some((t) => nameOf(t) === LIST_CONTEXT_SESSIONS_TOOL_NAME), "host directory must not change kernel tools");
++        const biliRest = bili.filter((t) => t !== entry && nameOf(t) !== DECOMPRESS_TOOL_NAME && nameOf(t) !== LIST_CONTEXT_SESSIONS_TOOL_NAME);
+         const kernelRest = kernel.filter((t) => t !== kernelEntry && nameOf(t) !== DECOMPRESS_TOOL_NAME);
          assert.deepEqual(biliRest, kernelRest, "no other tool may change");
      }
      const ro = searchEntry(BILI_ACP_READONLY_TOOLS_RESPONSES, "flat")!;
@@ -7891,7 +7908,7 @@ index 9a5647f4a276a2786456872fa117ece38708cb3d..7c3ad29fbc117827791b9615fbd6712b
      assert.equal((paramsOf(searchEntry(ACP_READONLY_TOOLS_RESPONSES, "flat")!).properties as Record<string, unknown>).conversation_id, undefined, "kernel readonly constant must not be mutated");
  });
  
-@@ -187,13 +188,15 @@ test("#841 resident historical session served from memory without disk", () => {
+@@ -187,13 +190,15 @@ test("#841 resident historical session served from memory without disk", () => {
  test("#841 cold-loaded historical session: read-only, file untouched, no save scheduled", async () => {
      _resetSessionsForTest();
      const dir = mkdtempSync(path.join(tmpdir(), "bili-xsearch-"));
@@ -7909,7 +7926,7 @@ index 9a5647f4a276a2786456872fa117ece38708cb3d..7c3ad29fbc117827791b9615fbd6712b
          await reader.boot();
          _setStoreForTest(reader);
  
-@@ -219,6 +222,8 @@ test("#841 cold-loaded historical session: read-only, file untouched, no save sc
+@@ -219,6 +224,8 @@ test("#841 cold-loaded historical session: read-only, file untouched, no save sc
      } finally {
          _setStoreForTest(new SessionStore({ enabled: false }));
          _resetSessionsForTest();
