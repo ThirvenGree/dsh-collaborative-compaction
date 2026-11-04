@@ -1,5 +1,8 @@
 import {createHash} from 'node:crypto';
 import {fixtureCases,runReplaySuite} from './replay.js';
+import {collectCases,bankControl,citedSpans} from './challenge-bank.js';
+import {validateClause,renderClause} from './proposal.js';
+export {collectCases,validateChallengeGroups} from './challenge-bank.js';
 
 // A replay can select these source-handling instructions. Nothing returned by a model is persisted as executable policy.
 const families={
@@ -14,11 +17,8 @@ const anchored={
  'distinguish-receipts':'For an irreversible action preserve one short ledger entry: permitted or requested, attempted, confirmed or still unknown, next safe check and supporting record. Never label an attempt as confirmed.'
 };
 const rules=Object.fromEntries(Object.entries(families).flatMap(([key,family])=>[[key,family.text],[key+'-anchored',anchored[key]]]));
-const holdouts=[
- {id:'unseen-identifier',question:'校准工单最终指定使用哪个探针标识？只回答标识。',expected:'probe_L9',requiredIds:['h1'],requiredQuotes:{h1:'probe_L9'},records:[{id:'h1',role:'tool',text:'校准工单确认使用探针 probe_L9，先作只读测量。'}]},
- {id:'unseen-correction',question:'按最后一次变更，返程在几号站台？只答站台号。',expected:'七号',requiredIds:['h3'],requiredQuotes:{h3:'七号'},records:[{id:'h2',role:'user',text:'返程在二号站台。'},{id:'h3',role:'user',text:'后来通知改了，返程在七号站台。',corrects:'h2'}]},
- {id:'unseen-receipt',question:'归档申请现在应重新发送（submit）、核对结果（verify），还是宣布完成（done）？仅答英文动作。',expected:'verify',requiredIds:['h5'],requiredQuotes:{h5:'尚无确认编号'},records:[{id:'h4',role:'user',text:'只允许提出一次归档申请。'},{id:'h5',role:'tool',text:'申请已经发出，尚无确认编号，外部状态未知。'}]}
-];
+const builtIns=collectCases();
+const holdouts=builtIns.groups.slice(0,3).map(group=>group.positive);
 const background=[
  '傍晚整理完桌上的空文件夹，借用的水杯已经洗净放回原处。窗边贴的新纸条只是提醒离开前关灯，大家已经读过。',
  '例行碰面时花了些时间核对签到位置，临时放错地方的标签已取回。换了笔仍写得不顺，拿来备用笔之后这件小事已处理好。',
@@ -30,35 +30,32 @@ const background=[
  '讨论休息处摆放杂志的方式时更换了几种顺序，最后由当值人员自行决定。这件事情不需要在之后的交接时继续跟进。',
  '记录里的字迹难辨是墨水太淡所致，换了一支笔后可以清楚阅读。空笔芯已经单独放好，等下次收集时一并处理。'
 ];
-export const validationCases=[...fixtureCases,...holdouts];
+export const validationCases=builtIns.all;
+export const diagnosticCases=builtIns.diagnostics;
 export const scopeOf=c=>createHash('sha256').update(JSON.stringify(Object.entries(c).filter(([k])=>k!=='replayFeedbackEnabled').sort(([a],[b])=>a.localeCompare(b)))).digest('hex');
 export const emptyPolicy=()=>({schema:1,revision:0,active:{version:0,rules:[],scope:null},previous:null,last:null,lease:null,lastAttempt:0});
+function checkedClauses(clauses=[]){
+ if(!Array.isArray(clauses)||clauses.length>4)throw Error('Invalid learned compression policy');
+ const checked=clauses.map(c=>validateClause(c));
+ if(new Set(checked.map(c=>c.id)).size!==checked.length)throw Error('Duplicate learned compression clause');
+ return checked;
+}
 export function effectivePolicy(state,scope){
  const policy=state.active;
  if(policy.scope!==scope)return {version:0,rules:[],scope};
  if(!Number.isSafeInteger(policy.version)||policy.version<0||!Array.isArray(policy.rules)||policy.rules.length>3||
     new Set(policy.rules).size!==policy.rules.length||policy.rules.some(id=>!Object.hasOwn(rules,id))||new Set(policy.rules.map(id=>id.replace(/-anchored$/,''))).size!==policy.rules.length)throw Error('Invalid compression policy');
- return policy;
+ return policy.clauses===undefined?policy:{...policy,clauses:checkedClauses(policy.clauses)};
 }
 export function withPolicy(work,policy){
- const snapshot={...work,policyVersion:policy.version,policyRules:[...policy.rules]};
- if(policy.rules.length)snapshot.instructions+='\n[Compression policy v'+policy.version+': '+policy.rules.join(', ')+']\n'+policy.rules.map(id=>rules[id]).join('\n');
- return snapshot;
-}
-// Only substrings visibly associated with the same record label can be cited by summary-only readers.
-function citedSpans(text,records){
- const spans=[];
- const matches=[...text.matchAll(/\[([\w-]+)\]/g)];
- for(const [i,m] of matches.entries()){
-  const record=records.find(r=>r.id===m[1]);if(!record)continue;
-  const chunk=text.slice(m.index+m[0].length,matches[i+1]?.index);
-  for(let start=0;start<record.text.length;start++){
-   let end=start+4;if(!chunk.includes(record.text.slice(start,end))||end>record.text.length)continue;
-   while(end<record.text.length&&chunk.includes(record.text.slice(start,end+1)))end++;
-   spans.push({id:record.id,quote:record.text.slice(start,end)});start=end-1;
-  }
+ const clauses=checkedClauses(policy.clauses);
+ const snapshot={...work,policyVersion:policy.version,policyRules:[...policy.rules,...clauses.map(c=>c.id)]};
+ if(policy.rules.length||clauses.length){
+  const marker=[...policy.rules,...(clauses.length?['learned']:[])].join(', ');
+  const instructions=[...policy.rules.map(id=>rules[id]),...clauses.map(c=>renderClause(c))];
+  snapshot.instructions+='\n[Compression policy v'+policy.version+': '+marker+']\n'+instructions.join('\n');
  }
- return spans;
+ return snapshot;
 }
 function quality(probes){
  return Object.fromEntries(probes.map(({id,classification,lanes})=>[id,{classification,
@@ -66,44 +63,97 @@ function quality(probes){
    summaryCorrect:lanes.summary.correct===true,retrievalCorrect:lanes.retrieval.correct===true}]));
 }
 const stop=report=>report.probes.flatMap(p=>Object.values(p.lanes)).find(l=>l.error);
-export async function evaluateFeedback({diagnostic,active,nextVersion,options,compress}){
+function chunks(list,size=4){
+ return Array.from({length:Math.ceil(list.length/size)},(_,i)=>list.slice(i*size,(i+1)*size));
+}
+async function regenerated(suites,policy,{options,compress}){
+ const cases=[],summaries=new Map();
+ for(const suite of suites){
+  options.signal?.throwIfAborted();
+  const source=suite.flatMap(x=>x.records);
+  const noise=background.map((text,i)=>({id:'noise-'+i,role:'assistant',text}));
+  const records=source.flatMap((r,i)=>noise[i]?[noise[i],r]:[r]).concat(noise.slice(source.length));
+  const content=records.map(r=>'['+r.id+'] '+r.text).join('\n');
+  const summary=await compress({content,reference:'',instructions:'Summarize the current decisions and task state. Cite relevant record IDs as [id] alongside short exact evidence where available.',trigger:'calibration',minSummaryChars:1,maxSummaryChars:420},policy);
+  const summaryCitations=citedSpans(summary,records);
+  for(const t of suite){cases.push({...t,records,summary,summaryCitations});summaries.set(t.id,summary);}
+ }
+ const report=await runReplaySuite({...options,cases});
+ if(stop(report))throw Error(stop(report).error);
+ return {before:quality(report.probes),summaries,report};
+}
+function regressed(before,after){
+ return Object.keys(before).some(id=>['full','summary','retrieval','summaryCorrect','retrievalCorrect'].some(lane=>before[id][lane]&&!after[id][lane]));
+}
+function unchanged(reason,proof={}){return {status:'held',reason,...proof};}
+async function modelFeedback({active,nextVersion,options,compress,propose},bank){
+ // Separate compression corpora as well as prompts. The summaries sent to the proposer must not contain holdouts.
+ const discoverySuites=chunks(bank.diagnostics);
+ const hiddenSuites=chunks(bank.groups.flatMap(g=>[g.positive,g.counter]));
+ const oldDiscovery=await regenerated(discoverySuites,active,{options,compress});
+ const beforeDiscovery=oldDiscovery.before;
+ if(Object.values(beforeDiscovery).some(q=>!q.full))return unchanged('重生成后的原文组未通过。',{before:beforeDiscovery});
+ const failures=bank.diagnostics.filter(t=>t.id!==bankControl.id&&!beforeDiscovery[t.id].summary).map(t=>{
+  const probe=oldDiscovery.report.probes.find(p=>p.id===t.id);
+  return {...t,summary:oldDiscovery.summaries.get(t.id),classification:probe.classification,summaryAnswer:probe.lanes.summary.answer,summaryCited:probe.lanes.summary.cited,summaryCorrect:probe.lanes.summary.correct,retrievalRecovered:probe.lanes.retrieval.pass};
+ });
+ if(!failures.length)return {status:'unchanged',reason:'现行策略重生成的摘要已经通过，未复现诊断遗漏。',before:beforeDiscovery};
+ const response=await propose({failures,active:checkedClauses(active.clauses)});
+ if(response?.status!=='candidate')return unchanged(response?.reason||'没有通过独立审核的模型提案。',{before:beforeDiscovery});
+ const {targets,replaceId}=response;
+ if(!Array.isArray(targets)||targets.length<1||targets.length>2||new Set(targets).size!==targets.length||!targets.every(id=>failures.some(f=>f.id===id)))
+  return unchanged('候选未绑定到实际复现的诊断失误。');
+ let clause;
+ try{clause=validateClause(response.clause);}catch{return unchanged('候选条款结构无效。');}
+ const previous=checkedClauses(active.clauses);
+ if(previous.some(c=>c.id===clause.id)||replaceId&&!previous.some(c=>c.id===replaceId))return unchanged('候选重复或要替换的旧条款已经变化。');
+ const clauses=previous.filter(c=>c.id!==replaceId).concat([clause]);
+ if(clauses.length>4)return unchanged('当前四条自拟策略已满；本次提案未指定可替换的旧条款。');
+ // No discovery answers, withheld source text or record labels may be stashed in a reusable instruction.
+ const text=[clause.when,clause.retain,clause.relation].join(' ').normalize('NFKC').toLowerCase();
+ const disallowed=bank.all.flatMap(t=>[t.expected,t.question,...t.records.map(r=>r.text),...Object.values(t.requiredQuotes||{})]);
+ if(disallowed.some(v=>v.length>=4&&text.includes(v.normalize('NFKC').toLowerCase())))return unchanged('候选出现校准题的专用字面量，未采用。');
+ const candidate={...active,version:nextVersion,clauses};
+ const oldHidden=await regenerated(hiddenSuites,active,{options,compress});
+ const before={...beforeDiscovery,...oldHidden.before};
+ if(Object.values(oldHidden.before).some(q=>!q.full))return unchanged('未见场景的原文对照不可靠。',{before});
+ const {before:after}=await regenerated([...discoverySuites,...hiddenSuites],candidate,{options,compress});
+ const noRegression=!regressed(before,after),control=after[bankControl.id].summary&&after[bankControl.id].retrieval;
+ const recovered=targets.filter(id=>{
+  const {positive,counter}=bank.groups.find(g=>g.probe.id===id),unseen=[positive.id,counter.id];
+  return !before[id].summary&&after[id].summary&&after[id].retrieval&&
+   unseen.every(key=>after[key].summary&&after[key].retrieval)&&unseen.some(key=>!before[key].summary);
+ });
+ const proof={before,after,gates:{noRegression,control,recovered},proposed:[clause.id],targets,...(replaceId?{replaceId}:{})};
+ if(!noRegression||!control||recovered.length!==targets.length)return unchanged('新提案未同时修复复现题和未见题、守住边界反例以及其他基线。',proof);
+ return {status:'promoted',reason:'模型提出的条款已通过独立审核，改进了复现题和未见场景，边界反例与其余对照均无退步。',...proof,candidate};
+}
+export async function evaluateFeedback(args){
+ const {diagnostic,active,nextVersion,options,compress,propose,challengeGroups=[]}=args;
  const unavailable=stop(diagnostic);
  if(unavailable)return {status:'unavailable',reason:unavailable.error};
- if(diagnostic.probes.length!==fixtureCases.length||!fixtureCases.every(c=>diagnostic.probes.some(p=>p.id===c.id&&p.lanes.full.pass)))
-  return {status:'held',reason:'诊断的原文对照不足，不能归因于压缩策略。'};
- const control=fixtureCases.at(-1).id;
- if(!diagnostic.probes.find(p=>p.id===control).lanes.summary.pass)return {status:'held',reason:'摘要充足的正对照未通过。'};
- const suspects=Object.keys(families).filter(id=>!diagnostic.probes.find(p=>p.id===families[id].probe).lanes.summary.pass);
- if(!suspects.length)return {status:'unchanged',reason:'未发现可调整的新条款。'};
- // Keep the validation questions, answers and failure labels out of both compressors.
- const run=async policy=>{
-  const cases=[];
-  for(const suite of [fixtureCases,holdouts]){
-   options.signal?.throwIfAborted();
-   const source=suite.flatMap(x=>x.records);
-   const noise=background.map((text,i)=>({id:'noise-'+i,role:'assistant',text}));
-   const records=source.flatMap((r,i)=>noise[i]?[noise[i],r]:[r]).concat(noise.slice(source.length));
-   const content=records.map(r=>'['+r.id+'] '+r.text).join('\n');
-   const summary=await compress({content,reference:'',instructions:'Summarize the current decisions and task state. Cite relevant record IDs as [id] alongside short exact evidence where available.',trigger:'calibration',minSummaryChars:1,maxSummaryChars:420},policy);
-   const summaryCitations=citedSpans(summary,records);
-   for(const test of suite)cases.push({...test,records,summary,summaryCitations});
-  }
-  const report=await runReplaySuite({...options,cases});
-  if(stop(report))throw Error(stop(report).error);
-  return quality(report.probes);
- };
+ const bank=collectCases(challengeGroups);
+ const diagnostics=propose?bank.diagnostics:fixtureCases;
+ if(diagnostic.probes.length!==diagnostics.length||!diagnostics.every(c=>diagnostic.probes.some(p=>p.id===c.id&&p.lanes.full.pass)))
+  return unchanged('诊断的原文对照不足，不能归因于压缩策略。');
+ const control=bankControl.id;
+ if(!diagnostic.probes.find(p=>p.id===control).lanes.summary.pass)return unchanged('摘要充足的正对照未通过。');
+ const misses=diagnostics.filter(t=>!diagnostic.probes.find(p=>p.id===t.id).lanes.summary.pass);
+ // A prepared diagnostic summary can succeed even when the actual compressor drops the same evidence.
+ if(propose)return modelFeedback(args,bank);
+ if(!misses.length)return {status:'unchanged',reason:'本轮未发现需要调整的压缩遗漏。'};
+ // Compatibility path for callers of the original diagnostic API, without a proposal service.
+ const run=async policy=>(await regenerated([fixtureCases,holdouts],policy,{options,compress})).before;
  const before=await run(active);
- if(Object.values(before).some(q=>!q.full))return {status:'held',reason:'重生成对照中，原文组未通过。',before};
- const signals=suspects.filter(id=>!before[families[id].probe].summary);
+ if(Object.values(before).some(q=>!q.full))return unchanged('重生成对照中，原文组未通过。',{before});
+ const signals=Object.keys(families).filter(id=>misses.some(t=>t.id===families[id].probe)&&!before[families[id].probe].summary);
  if(!signals.length)return {status:'unchanged',reason:'现行策略重生成的摘要已经通过，未复现诊断遗漏。',before};
  const revised=signals.map(id=>active.rules.includes(id)?id+'-anchored':id);
- const unchanged=active.rules.filter(id=>!signals.includes(id.replace(/-anchored$/,'')));
- const candidate={version:nextVersion,rules:[...unchanged,...revised],scope:active.scope};
+ const retained=active.rules.filter(id=>!signals.includes(id.replace(/-anchored$/,'')));
+ const candidate={...active,version:nextVersion,rules:[...retained,...revised]};
  const after=await run(candidate);
- const regression=Object.keys(before).some(id=>['full','summary','retrieval','summaryCorrect','retrievalCorrect'].some(lane=>before[id][lane]&&!after[id][lane]));
  const recovered=signals.filter(key=>{const {probe,holdout}=families[key];return !before[probe].summary&&after[probe].summary&&after[probe].retrieval&&after[holdout].summary&&after[holdout].retrieval;});
- const gates={noRegression:!regression,control:after[control].summary&&after[control].retrieval,recovered};
- // A bundled amendment must earn each clause, not hide a useless clause behind a different improvement.
- if(regression||!gates.control||recovered.length!==signals.length)return {status:'held',reason:'候选未逐项改善已复现的失误、未通过未见情境或使其他表现退步。',before,after,gates,proposed:revised};
- return {status:'promoted',reason:'各项遗漏在真实重生成对照中得到补足；未见情境、充足摘要对照和无回退检查通过。',before,after,gates,proposed:revised,candidate};
+ const gates={noRegression:!regressed(before,after),control:after[control].summary&&after[control].retrieval,recovered};
+ if(!gates.noRegression||!gates.control||recovered.length!==signals.length)return unchanged('候选未逐项改善已复现的失误、未通过未见情境或使其他表现退步。',{before,after,gates,proposed:revised});
+ return {status:'promoted',reason:'各项遗漏已补足，未见情境和无退步检查通过。',before,after,gates,proposed:revised,candidate};
 }

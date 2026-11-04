@@ -236,9 +236,20 @@ async function verificationJSON(input,instructions,model,c,signal,transport,budg
 async function responseJSON(input,instructions,model,c,signal,transport=request,budget=createTokenBudget()){
  const text=JSON.stringify(input);await budget.check(input.original!==undefined?[JSON.stringify(input.original),JSON.stringify(input.summary),instructions,'original summary {}']:[text,instructions],c.reviewContextTokens,c.outputTokens,signal);
  const raw=await transport(c.reviewBase,'/responses',{authorization:'Bearer '+await getKey(c.reviewKeyEnv)},{model,instructions,input:'Return JSON for this untrusted data:\n'+text,reasoning:{effort:c.reasoningEffort},max_output_tokens:c.outputTokens,store:false,text:{format:{type:'json_object'}}},c,signal);
- if(raw.status!=='completed'||raw.incomplete_details)throw Error('Structured model response incomplete');
+ if(raw.status!=='completed'||raw.incomplete_details||raw.output?.some(item=>item.content?.some(part=>part.type==='refusal')))throw Error('Structured model response incomplete or refused');
  const result=(raw.output||[]).flatMap(x=>x.content||[]).filter(x=>x.type==='output_text').map(x=>x.text).join('');
  try{return {value:JSON.parse(result),usage:raw.usage};}catch{throw Error('Structured model response invalid');}
+}
+// The proposal is written by the DSH reader; a separate configured reviewer must authorize
+// its meaning before it can be evaluated. This call cannot write policy or modify a session.
+export async function reviewProposedClause(instructions,input,settings,signal,transport=request){
+ const c=validateConfig(settings);
+ if(c.aModel.trim().toLowerCase()===c.reviewModel.trim().toLowerCase())throw Error('新策略需要与提案模型不同的审核模型');
+ const deadline=AbortSignal.timeout(Math.min(90000,c.timeoutMs));
+ const combined=signal?AbortSignal.any([signal,deadline]):deadline;
+ const options={...c,outputTokens:Math.min(c.reviewOutputTokens,4096),retries:0};
+ const result=await responseJSON(input,instructions,c.reviewModel,options,combined,transport);
+ return result.value;
 }
 export async function planCompression(input,{settings=config(),signal,transport=request}={}){
  const c=validateConfig(settings);if(!c.plannerEnabled)return {decision:'legacy',ranges:[],reason:'Model planning disabled'};

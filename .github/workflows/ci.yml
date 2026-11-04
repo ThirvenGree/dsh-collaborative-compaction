@@ -42,4 +42,4 @@ jobs:
       - name: Run the feedback loop through its HTTP endpoints
         env:
           COLLAB_TEST_ENGINE: ${{ github.workspace }}/.engine
-        run: node --test test/replay-feedback-host.test.js
+        run: node --test test/replay-feedback-host.test.js test/open-policy-host.test.js

@@ -13,23 +13,36 @@ const engineInstalled=fs.existsSync(path.join(engine,'dist/external-summary-sett
 test('ordinary compression triggers calibration; the next request and restarted host use the promoted policy',
  {skip:engineInstalled?false:'Build the patched engine and set COLLAB_TEST_ENGINE to run the HTTP integration.',timeout:30000},async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'collab-policy-http-'));
- const env={DSH_HOME:path.join(dir,'home'),DSH_COLLAB_TEST_HOME:dir,BILI_CONFIG_FILE:path.join(dir,'engine.json'),DSH_PROFILE_DIR:undefined};
+ const env={DSH_HOME:path.join(dir,'home'),DSH_COLLAB_TEST_HOME:dir,BILI_CONFIG_FILE:path.join(dir,'engine.json'),DSH_PROFILE_DIR:undefined,LOCAL_REPLAY_TEST_KEY:'fixture-only'};
  const previous=Object.fromEntries(Object.keys(env).map(k=>[k,process.env[k]]));
  const assign=values=>{for(const [key,value] of Object.entries(values)){if(value===undefined)delete process.env[key];else process.env[key]=value;}};
  assign(env);
  t.after(()=>{assign(previous);fs.rmSync(dir,{recursive:true,force:true});});
+ const nativeFetch=globalThis.fetch;
+ const clause={when:'summarizing technical identifiers',retain:['exact spelling','specific purpose'],relation:'connection between names and purposes'};
+ globalThis.fetch=async(url,options)=>{
+  const u=new URL(url);if(u.hostname==='127.0.0.1')return nativeFetch(url,options);
+  if(u.href!=='https://policy-review.invalid/v1/responses')throw Error('unexpected external transport in isolated test');
+  const args=JSON.parse(options.body);const review=JSON.parse(args.input.slice(args.input.indexOf('{')));
+  assert.equal(review.task,'review-compression-clause');
+  return Response.json({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({decision:'approve',safe:true,general:true,supportedTargets:review.targets})}]}]});
+ };
+ t.after(()=>{globalThis.fetch=nativeFetch;});
  const {defaults}=await import('../runtime.js'),{apply}=await import('../host.js');
- fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:false,aProvider:'test',aModel:'fixture'}));
+ fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:false,aProvider:'test',aModel:'fixture',reviewBase:'https://policy-review.invalid/v1',reviewKeyEnv:'LOCAL_REPLAY_TEST_KEY'}));
  fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:engine}));
  const seen=[];
  async function* stream(req){
   const input=JSON.parse(req.messages[0].content[0].text);
   let text;
   if(typeof input.content==='string'){
-   const amended=req.system.includes('retain-identifiers');
+   const amended=req.system.includes(clause.relation);
    if(input.content.startsWith('隔离收据'))seen.push(amended);
    text=input.content.split('\n').filter(line=>!line.startsWith('[noise-')).join('\n');
    if(!amended)text=text.replaceAll('listen_frame_Q7','只读工具').replaceAll('probe_L9','探针');
+  }else if(input.task==='propose-compression-clause'){
+   assert.ok(input.failures.some(r=>r.id==='omitted-tool'));
+   text=JSON.stringify({decision:'propose',targets:['omitted-tool'],...clause});
   }else{
    const probe=validationCases.find(c=>c.question===input.question);
    assert.ok(probe,'unknown probe');

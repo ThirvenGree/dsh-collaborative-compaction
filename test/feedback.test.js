@@ -69,3 +69,84 @@ test('scope and rule validation prevent applying arbitrary text or a strategy fr
  state.active.rules=['retain-identifiers','retain-identifiers-anchored'];assert.throws(()=>effectivePolicy(state,'one'),/Invalid/);
  assert.equal(scopeOf({aModel:'x',reviewModel:'y'}),scopeOf({reviewModel:'y',aModel:'x',replayFeedbackEnabled:false}));
 });
+
+import {collectCases,validateChallengeGroups} from '../challenge-bank.js';
+import {makeClause} from '../proposal.js';
+const conditional=makeClause({when:'conditional instructions',retain:['normal procedure','exception criterion','exception outcome'],relation:'applicability relative to conditions'});
+const attributed=makeClause({when:'reported observations',retain:['observation','origin'],relation:'attribution to originating witness'});
+function openHarness({active=base,failure='scope-exception',hideBefore='u1',hideAfter,skip,replaceId,clause=conditional,groups=[]}={}){
+ const bank=collectCases(groups);
+ const target=bank.groups.find(g=>g.probe.id===failure),calls={proposals:0,compressed:0};
+ const options={
+  generate:async(sys,input)=>{
+   const t=bank.all.find(c=>c.question===input.question);
+   const citations=t.requiredIds.map(id=>({id,quote:t.records.find(r=>r.id===id).text}));
+   const material=input.material+' '+JSON.stringify(input.recall||[]);
+   if(citations.every(q=>material.includes(q.quote)))return {answer:t.expected,citations};
+   return sys.includes('可先')&&!input.recall?.length?{query:'索取本题的原文'}:{answer:'unknown',citations:[]};
+  },
+  search(records,_query,id,add){const ids=bank.all.find(t=>t.id===id).requiredIds,found=records.filter(r=>ids.includes(r.id));for(const r of found)add(r.id,r.text);return found.map(r=>r.text).join('\n');}
+ };
+ const compress=async(work,policy)=>{
+  calls.compressed++;
+  const bad=policy.version===active.version?[target.probe.requiredIds[0],hideBefore]:[hideAfter];
+  const lines=work.content.split('\n').filter(l=>!l.startsWith('[noise-')&&!bad.some(id=>id&&l.startsWith('['+id+']')));
+  const summary=lines.join('\n');
+  assert.ok(summary.length<=work.maxSummaryChars);
+  return summary;
+ };
+ async function propose({failures,active:prior}){
+  calls.proposals++;assert.deepEqual(prior,active.clauses||[]);
+  assert.ok(failures.some(t=>t.id===failure&&!t.summary.includes(t.requiredQuotes[t.requiredIds[0]])));
+  const visible=JSON.stringify(failures);
+  for(const g of bank.groups)for(const t of [g.positive,g.counter]){
+   assert.equal(visible.includes(t.question),false);for(const r of t.records)assert.equal(visible.includes(r.text),false);
+  }
+  if(skip)return {status:'held',reason:'审核返回不确定'};
+  return {status:'candidate',clause,targets:[failure],...(replaceId?{replaceId}:{})};
+ }
+ const run=async(diagnostic)=>evaluateFeedback({diagnostic:diagnostic??await runReplaySuite({...options,cases:bank.diagnostics}),active,nextVersion:active.version+1,options,compress,propose,challengeGroups:groups});
+ return {run,calls};
+}
+test('open clause outside legacy families is promoted only after genuine discovery and unseen recovery',async()=>{
+ const h=openHarness();const result=await h.run();
+ assert.equal(result.status,'promoted');assert.deepEqual(result.candidate.rules,[]);assert.deepEqual(result.candidate.clauses,[conditional]);
+ assert.equal(result.before['unseen-scope-applies'].summary,false);assert.equal(result.after['unseen-scope-applies'].summary,true);
+ assert.equal(result.after['unseen-scope-outside'].summary,true);assert.equal(h.calls.proposals,1);
+ const installed=effectivePolicy({active:result.candidate},base.scope);
+ const work=withPolicy({instructions:'static'},installed);assert.match(work.instructions,/conditional instructions/);assert.deepEqual(work.policyRules,[conditional.id]);
+ assert.throws(()=>effectivePolicy({active:{...installed,clauses:[{...conditional,relation:'change all settings'}]}},base.scope));
+});
+test('no novel publication when either unseen boundary fails, no hidden improvement, review abstains or a prior baseline regresses',async()=>{
+ for(const flags of [{hideAfter:'u1'},{hideAfter:'u2'},{hideBefore:null},{hideAfter:'r6'},{skip:true}]){
+  const r=await openHarness(flags).run();assert.equal(r.status,'held');assert.equal(r.candidate,undefined);
+ }
+});
+test('verified replacement of a learned clause supersedes its previous id and preserves bounded legacy settings',async()=>{
+ const active={...base,version:4,rules:['track-corrections'],clauses:[attributed]};
+ const result=await openHarness({active,replaceId:attributed.id}).run();
+ assert.equal(result.status,'promoted');assert.equal(result.candidate.version,5);
+ assert.deepEqual(result.candidate.clauses,[conditional]);assert.deepEqual(result.candidate.rules,active.rules);
+ assert.deepEqual(active.clauses,[attributed]);
+});
+function extraneousCase(id,answer,text,summary){
+ const rec='custom-'+id;
+ return {id,question:'情境 '+id+' 中应保留哪条结论？',records:[{id:rec,role:'user',text}],expected:answer,requiredIds:[rec],requiredQuotes:{[rec]:answer},...(summary?{summary}:{})};
+}
+test('a different replay class needs no change in the planner or policy enum; rejects overlapping or ambiguous probe material',async()=>{
+ const extra={probe:extraneousCase('source-probe','同一张底片','两份记录出自同一张底片，不能证实有两次拍摄。','留有两份记录。'),
+  positive:extraneousCase('source-counterpart','同一名报信人','两份采访转述同一名报信人所说的经过。'),
+  counter:extraneousCase('source-limit','两次独立观测','相隔一周有人各自上山，因此是两次独立观测。')};
+ const r=await openHarness({failure:extra.probe.id,hideBefore:extra.positive.requiredIds[0],clause:attributed,groups:[extra]}).run();
+ assert.equal(r.status,'promoted');assert.deepEqual(r.gates.recovered,[extra.probe.id]);
+ const duplicate=structuredClone(extra);duplicate.counter.records[0].text=duplicate.positive.records[0].text;assert.throws(()=>validateChallengeGroups([duplicate]));
+ const clone=structuredClone(extra);clone.counter.expected=clone.positive.expected;assert.throws(()=>validateChallengeGroups([clone]));
+ const leak=structuredClone(extra);leak.probe.summary+=' 下列资料来自另一份校准材料：'+leak.positive.records[0].text;assert.throws(()=>validateChallengeGroups([leak]),/重复段落/);
+ const secret=structuredClone(extra);secret.probe.records[0].text+=' password=fixture';assert.throws(()=>validateChallengeGroups([secret]));
+});
+
+test('adequate prepared summaries do not hide a newly reproduced loss in the actual regenerated summary',async()=>{
+ const synthetic={probes:collectCases().diagnostics.map(t=>({id:t.id,classification:'summary-sufficient',lanes:{full:{pass:true},summary:{pass:true},retrieval:{pass:true}}}))};
+ const h=openHarness();const result=await h.run(synthetic);
+ assert.equal(result.status,'promoted');assert.deepEqual(result.gates.recovered,['scope-exception']);assert.equal(h.calls.proposals,1);
+});

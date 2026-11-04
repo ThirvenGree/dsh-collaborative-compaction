@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "groups": [{
+    "probe": {
+      "id": "witness-discovery",
+      "question": "盒子的下落有人在现场核实，还是只有转述？只回答「现场核实」或「只有转述」。",
+      "expected": "只有转述",
+      "summary": "值班记录提到了盒子的下落。",
+      "records": [{"id": "wBox", "role": "user", "text": "同事转告我盒子已经入库；我没有见到盒子，也还没查交接表。"}],
+      "requiredIds": ["wBox"],
+      "requiredQuotes": {"wBox": "同事转告我盒子已经入库"}
+    },
+    "positive": {
+      "id": "witness-positive",
+      "question": "钟楼的停摆消息有没有目击记录？只回答「亲眼见过」或「尚待核对」。",
+      "expected": "尚待核对",
+      "records": [{"id": "wBell", "role": "assistant", "text": "游客听路人说钟楼停了，这位游客没去过现场，记录人也没有查看钟楼。"}],
+      "requiredIds": ["wBell"],
+      "requiredQuotes": {"wBell": "游客听路人说钟楼停了"}
+    },
+    "counter": {
+      "id": "witness-counter",
+      "question": "管理员凭什么确认画已挂好？只回答「本人查看」或「他人告知」。",
+      "expected": "本人查看",
+      "records": [{"id": "wArt", "role": "user", "text": "管理员自己走到展厅，亲眼确认画框已经挂牢，还签了当天的巡检单。"}],
+      "requiredIds": ["wArt"],
+      "requiredQuotes": {"wArt": "亲眼确认画框已经挂牢"}
+    }
+  }]
+}

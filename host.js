@@ -1,5 +1,7 @@
+import {proposeClause} from './proposal.js';
+import {collectCases} from './challenge-bank.js';
 import {emptyPolicy,effectivePolicy,evaluateFeedback,scopeOf,withPolicy} from './feedback.js';
-import {fixtureCases,replaySearch,runReplaySuite,screenMethod} from './replay.js';
+import {replaySearch,runReplaySuite,screenMethod} from './replay.js';
 import {pathToFileURL} from 'node:url';
 import http from 'node:http';
 import net from 'node:net';
@@ -7,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {randomUUID,timingSafeEqual,randomBytes,createHash} from 'node:crypto';
-import {config,validateConfig,dataRoot,defaultRoot,activeProfile,migrateProfile,recoverRuns,runs,runPipeline,planCompression} from './runtime.js';
+import {config,validateConfig,dataRoot,defaultRoot,activeProfile,migrateProfile,recoverRuns,runs,runPipeline,planCompression,reviewProposedClause} from './runtime.js';
 export const name='collaborative-compaction';
 export const inject=['webServer','llm'];
 const route='/dsh-collaborative-compaction';
@@ -202,6 +204,29 @@ export function settingsAction(input){
  if(input.action==='rollback-replay-policy'||input.action==='run-fixture-replay')return input.action;
  throw Error('Unknown settings action');
 }
+// Only operator-supplied replay examples from this profile may extend the diagnostic bank.
+export function loadChallengeBank(root){
+ const file=path.join(root,'feedback-cases.json');
+ let fd;
+ try{fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NONBLOCK||0));}catch(e){if(e.code!=='ENOENT')throw e;}
+ if(fd===undefined)return {groups:[],digest:'built-in'};
+ try{
+  const stat=fs.fstatSync(fd);
+  if(!stat.isFile()||stat.size<=0||stat.size>262144)throw Error('feedback-cases.json 须为不超过 256 KiB 的 JSON 文件');
+  const data=Buffer.alloc(stat.size);
+  let offset=0;
+  while(offset<data.length){
+   const n=fs.readSync(fd,data,offset,data.length-offset,null);
+   if(!n)throw Error('读取回放样例包时文件发生变化');
+   offset+=n;
+  }
+  if(fs.readSync(fd,Buffer.alloc(1),0,1,null))throw Error('读取回放样例包时文件发生变化');
+  let bank;
+  try{bank=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(data));}catch{throw Error('feedback-cases.json 不是有效的 UTF-8 JSON');}
+  if(bank?.schema!==1||!Array.isArray(bank.groups))throw Error('feedback-cases.json 须包含 schema 1 和 groups 数组');
+  return {groups:bank.groups,digest:createHash('sha256').update(data).digest('hex')};
+ }finally{fs.closeSync(fd);}
+}
 export function apply(ctx){
  migrateProfile();
  fs.mkdirSync(dataRoot,{recursive:true});let token;const tokenFile=path.join(dataRoot,'local-token');if(fs.existsSync(tokenFile))token=fs.readFileSync(tokenFile,'utf8');else{token=randomBytes(32).toString('hex');fs.writeFileSync(tokenFile,token,{mode:0o600});}
@@ -226,8 +251,8 @@ export function apply(ctx){
    if(fs.existsSync(replayFile))state.report=read(replayFile);}catch{state.error='无法读取策略或回放记录，正式压缩使用可核验的策略或基础策略。';}
   return state;
  }
- async function replayOptions(signal){
-  const c=config();if(!c.enabled)throw Error('请先启用协作压缩');
+ async function replayOptions(signal,c){
+  if(!c.enabled)throw Error('请先启用协作压缩');
   const {searchEvidence}=await loadEngineExports();if(typeof searchEvidence!=='function')throw Error('压缩引擎尚未安装原文回放接口');
   return {provider:c.aProvider,model:c.aModel,signal,search:replaySearch(searchEvidence),generate:async(system,input,{provider,model,signal})=>{
    let text='',finished=false;
@@ -243,10 +268,10 @@ export function apply(ctx){
    return JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/gi,''));
   }};
  }
- async function replayCall(fn,signal){
+ async function replayCall(fn,signal,c=config()){
   const abort=new AbortController();pending.add(abort);try{
    const combined=AbortSignal.any([abort.signal,AbortSignal.timeout(600000),...(signal?[signal]:[])]);
-   return await fn(await replayOptions(combined));
+   return await fn(await replayOptions(combined,c));
   }finally{pending.delete(abort);}
  }
  async function runFixture(origin){
@@ -263,14 +288,19 @@ export function apply(ctx){
    });
    if(!claim)return;
   }else if(origin==='auto')return;
-  let diagnostic,feedback={status:'disabled',reason:'策略调整已关闭。'};
+  let bank,diagnostic,feedback={status:'disabled',reason:'策略调整已关闭。'};
   try{
    await replayCall(async options=>{
-    diagnostic=await runReplaySuite({...options,cases:fixtureCases});
-    if(claim)feedback=await evaluateFeedback({diagnostic,active:effectivePolicy(claim,scope),nextVersion:claim.revision+1,options,
+    bank=loadChallengeBank(dataRoot);
+    const {diagnostics}=collectCases(bank.groups);
+    diagnostic=await runReplaySuite({...options,cases:diagnostics});
+    if(claim)feedback=await evaluateFeedback({diagnostic,active:effectivePolicy(claim,scope),nextVersion:claim.revision+1,options,challengeGroups:bank.groups,
+      propose:({failures,active})=>proposeClause({failures,active,generate:options.generate,
+        review:(system,input)=>reviewProposedClause(system,input,c,options.signal),
+        provider:options.provider,model:options.model,signal:options.signal}),
       compress:(work,policy)=>summarize(work,c,options.signal,policy)});
     options.signal.throwIfAborted();
-   });
+   },undefined,c);
   }catch(error){
    feedback={status:'unavailable',reason:String(error.message).replace(/(?:sk-[\w-]+|Bearer\s+[^\s]+|AIza[\w-]+)/gi,'[redacted]').slice(0,300)};
   }
@@ -280,8 +310,12 @@ export function apply(ctx){
     if(disposed||old.lease?.id!==id||old.revision!==claim.revision)throw Error('策略版本已变化，丢弃旧回放');
     const latest=config();
     if(!latest.replayFeedbackEnabled||scopeOf(latest)!==scope||Date.now()>=old.lease.until)feedback={status:'held',reason:'验证期间配置改变或租约过期，保留当前策略。'};
+    if(feedback.status==='promoted'){
+     try{if(!bank||loadChallengeBank(dataRoot).digest!==bank.digest)throw Error('样例包已改变');}
+     catch{feedback={status:'held',reason:'验证期间回放样例包改变或已不可读，请用新样例重新验证。'};}
+    }
     const {candidate,...proof}=feedback;
-    const last={...proof,origin,at:Date.now(),from:effectivePolicy(old,scope).version};
+    const last={...proof,origin,at:Date.now(),challengeSets:bank?.groups.length??0,bankDigest:bank?.digest??null,proposer:c.aProvider+'/'+c.aModel,clauseReviewer:c.reviewModel,from:effectivePolicy(old,scope).version};
     if(!!candidate&&feedback.status==='promoted')return {...old,revision:old.revision+1,previous:effectivePolicy(old,scope),active:{...candidate,proof:last},last,lease:null};
     return {...old,last,lease:null};
    });
@@ -289,7 +323,7 @@ export function apply(ctx){
   }
   if(disposed)throw Error('回放随插件退出而取消');
   if(!diagnostic)throw Error(feedback.reason);
-  const report={...diagnostic,at:Date.now(),suite:'synthetic-v1',feedback};
+  const report={...diagnostic,at:Date.now(),suite:'open-replay-v2',feedback};
   write(replayFile,report);return report;
  }
  function startFixture(origin='manual'){
