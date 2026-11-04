@@ -8601,10 +8601,10 @@ index ea5bac1e3077c61ce649a701ec096ecb8570dc40..f64b980e18d798bb3a746c7e12f84e2d
      assert.notEqual(on, off, "flagged ctx → re-ranked output");
 diff --git a/tests/semantic-dist-smoke.test.ts b/tests/semantic-dist-smoke.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..fee5e95e0c3c7d56006b40b5103b8d1caf5d14c7
+index 0000000000000000000000000000000000000000..f430f74b3ee956f671a7a054521d61de8542e288
 --- /dev/null
 +++ b/tests/semantic-dist-smoke.test.ts
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,142 @@
 +import test from "node:test";
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
@@ -8612,15 +8612,27 @@ index 0000000000000000000000000000000000000000..fee5e95e0c3c7d56006b40b5103b8d1c
 +import os from "node:os";
 +import http from "node:http";
 +import net from "node:net";
-+import { spawn } from "node:child_process";
++import { execFile, spawn } from "node:child_process";
 +import { once } from "node:events";
 +import { randomUUID } from "node:crypto";
 +import { defaults } from "../src/semantic-settings.js";
 +
 +const dist = path.resolve(import.meta.dirname, "../dist/index.js");
 +const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
++async function removeFixture(dir: string) {
++    const target = path.resolve(dir);
++    assert.ok(target.startsWith(path.resolve(os.tmpdir()) + path.sep) && path.basename(target).startsWith("bili-semantic-dist-"));
++    const deadline = Date.now() + 15000;
++    for (;;) {
++        try { await fs.promises.rm(target, { recursive: true, force: true }); return; }
++        catch (error) {
++            if (!["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "") || Date.now() >= deadline) throw error;
++            await delay(200);
++        }
++    }
++}
 +
-+test("built search_context starts packaged semantic worker, applies controls, and retains FTS originals without a paid key", { skip: !fs.existsSync(dist), timeout: 60000 }, async () => {
++test("built search_context starts packaged semantic worker, applies controls, and retains FTS originals without a paid key", { skip: !fs.existsSync(dist), timeout: 60000 }, async t => {
 +    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bili-semantic-dist-"));
 +    const upstream = http.createServer((req, res) => {
 +        req.resume(); req.on("end", () => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({
@@ -8649,6 +8661,15 @@ index 0000000000000000000000000000000000000000..fee5e95e0c3c7d56006b40b5103b8d1c
 +        NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" };
 +    delete env.ACP_PORT; delete env.ACP_UPSTREAM; delete env.BILI_UPSTREAM_PROXY; delete env[keyEnv];
 +    const child = spawn(process.execPath, [dist, "start", "--config", config], { cwd: dir, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
++    // Register before termination: exit alone does not mean inherited stdio and
++    // worker subprocess handles have closed, and registering afterward can race.
++    let closed = false;
++    const closePromise = new Promise<void>(resolve => child.once("close", () => { closed = true; resolve(); }));
++    const waitForClose = (ms: number) => new Promise<boolean>(resolve => {
++        const timer = setTimeout(() => resolve(false), ms);
++        void closePromise.then(() => { clearTimeout(timer); resolve(true); });
++    });
++    let failed = false;
 +    let output = "";
 +    child.stdout.on("data", chunk => { output += String(chunk); }); child.stderr.on("data", chunk => { output += String(chunk); });
 +    const logFile = path.join(dir, "state", "billion-context", "bili.log"), semanticDir = path.join(dir, "semantic-search");
@@ -8699,14 +8720,31 @@ index 0000000000000000000000000000000000000000..fee5e95e0c3c7d56006b40b5103b8d1c
 +        const exact = await search("preserveRecentTokens=12000", "exact"); assert.match(exact, /indexed keyword search/);
 +        assert.ok(statuses().every(status => status.requestsToday === 0), "missing test key must prevent all paid requests");
 +        assert.doesNotMatch(output + fs.readFileSync(logFile, "utf8"), /Packaged (?:semantic|history search) worker is missing|worker stopped before completing|worker-error/);
-+    } finally {
-+        if (child.exitCode === null) {
-+            child.kill(); await Promise.race([once(child, "exit"), delay(5000)]);
-+            if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await once(child, "exit"); }
++    } catch (error) { failed = true; throw error; }
++    finally {
++        try {
++            try {
++                if (!closed && child.exitCode === null && child.signalCode === null) {
++                    // Windows key lookup can still own the fixture cwd after the
++                    // Node parent exits. Stop only this test's process tree.
++                    if (process.platform === "win32" && child.pid) await new Promise<void>(resolve => {
++                        execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, timeout: 5000 }, () => resolve());
++                    });
++                    if (!closed && child.exitCode === null && child.signalCode === null) child.kill();
++                }
++                if (!closed && !await waitForClose(5000)) {
++                    child.kill("SIGKILL");
++                    assert.ok(await waitForClose(5000), "isolated CLI did not close before fixture removal");
++                }
++            } finally {
++                upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
++            }
++            await removeFixture(dir);
++        } catch (cleanupError) {
++            if (!failed) throw cleanupError;
++            // Cleanup failures must not replace the assertion that caused them.
++            t.diagnostic("Fixture cleanup also failed: " + String(cleanupError));
 +        }
-+        upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve()));
-+        const target = path.resolve(dir); assert.ok(target.startsWith(path.resolve(os.tmpdir()) + path.sep) && path.basename(target).startsWith("bili-semantic-dist-"));
-+        fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 +    }
 +});
 diff --git a/tests/semantic-engine-integration.test.ts b/tests/semantic-engine-integration.test.ts
