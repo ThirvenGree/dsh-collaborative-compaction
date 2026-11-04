@@ -333,7 +333,7 @@ function Flow({d,set,saved}){
      h('li',null,'候选历史没有明显增长（不超过 8k token 或窗口的 10%，取较小值）时，沿用上一次的暂缓判断，最长 30 分钟。'),
      h('li',null,'自动压缩失败后暂停 10 分钟；达到 90% 硬阈值时不受暂停限制。'),
      h('li',null,'软阈值下后台审核，期间可继续追加消息。下一次请求会在工具配对完整时核对旧范围并提交；若原范围变了则丢弃。'),
-     h('li',null,'可用 search_context 查找自己会话的原文、旧摘要及附件说明，按命中的 open: 引用继续阅读。'),
+     h('li',null,'可用 search_context 查找当前或指定 conversation_id 会话的原文、旧摘要及附件说明，保持来源会话并按 open: 引用继续阅读。'),
      h('li',null,'关闭总开关会恢复引擎原来的压缩配置；对话模型、人设和记忆不受影响。')))));
 }
 
@@ -366,7 +366,7 @@ function Retrieval({retrieval}){
    h('dt',null,'历史原文检索'),h('dd',null,'search_context · SQLite 全文索引，在工作线程运行'),
    h('dt',null,'大工具结果取回'),h('dd',null,tool)),
   h('details',{className:'dcc-more'},h('summary',null,'检索如何工作'),
-   h('p',null,'search_context 可定位压缩前的原始记录、摘要和附件说明。两字人名使用短词索引，刚发送但尚未保存的消息也参与本轮检索。命中后可继续读取原文。'),
+   h('p',null,'search_context 可检索当前或指定会话的磁盘原文、摘要和附件说明。两字人名可检索；目标会话刚送达引擎、尚未保存的消息也会参与。用相同 conversation_id 和 open: 引用继续分页读取，不改写其他会话。未送达本引擎的历史不在索引内。'),
    h('p',null,'首次查询会建立可重建的本地索引，之后按记录变化更新；查询在工作线程运行。索引故障会明确提示搜索未完成，不代表原文不存在。搜索本身不调用外部模型。')));
 }
 function Settings({draft,base,set,retrieval}){

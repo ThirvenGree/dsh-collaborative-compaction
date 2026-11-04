@@ -14,7 +14,7 @@
 
 索引文件位于原 index.db 旁，文件名为 `index.db.search.sqlite`。它只保存搜索所需、经凭据遮蔽的文本及来源字段，不是正式记忆库，也不会上传 GitHub。推理内容、system 消息和图片二进制不进入搜索文档。原始 CAS 内容不改写。
 
-当前会话搜索合并持久化记录和本轮尚未落盘的消息。新消息覆盖同 ID 的旧内容；检索命中仍带来源、角色、时间、明确的更正关系和原文读取入口。相邻消息按真实记录顺序读取，不能把两个搜索命中项当作相邻发言。跨会话仍维持现有摘要访问范围。
+当前会话搜索合并持久化记录和本轮尚未落盘的消息。新消息覆盖同 ID 的旧内容；检索命中仍带来源、角色、时间、明确的更正关系和原文读取入口。相邻消息按真实记录顺序读取，不能把两个搜索命中项当作相邻发言。跨会话使用同一个工作线程索引，但始终以目标会话 ID 隔离。磁盘会话读取轻量状态与索引，不在主进程加载整段原文，也不恢复为活动会话；内存中的目标会话额外提供已送达引擎的新消息。目标为未知或别名有歧义时明确失败，不默认选择某段聊天。读取入口同时返回目标会话与证据 ID，分页保持两者不变。它只读取本机同一引擎存储中已有的数据，不自动导入尚未送达引擎的 DSH 会话。
 
 客户端重发完整历史时，第一次同步仍需把内存消息交给工作线程；后续只发送发生变化的正文和消息顺序。与已保存原文相同的内存副本继续使用索引。查询失败会使该会话的传输缓存失效，下一次重新同步，避免漏掉失败请求中的新消息。搜索线程重启后同样重新同步。
 
@@ -26,6 +26,10 @@
 
 测试使用独立临时数据库和合成文本，不调用外部模型，不写正式聊天、人物或记忆。验收包括两字人名、数字参数、参数内部子串、路径、日期、尚未落盘的新消息、同长度更正、删除、撤回以及旧证据句柄失效。
 
-长历史报告见 [history-search-benchmark.md](history-search-benchmark.md)。首建时间和磁盘增量必须单独报告，不能只用热查询表现宣称整体加速。旧格式归档的首次懒加载、很大的本轮内存消息，以及命中很多记录的查询仍有开销；索引不是语义检索，也不能从关键词结果自动推断事实或更正关系。
+长历史报告见 [history-search-benchmark.md](history-search-benchmark.md)，本次跨会话 2 万条原文对照见 [cross-session-search-benchmark.md](cross-session-search-benchmark.md)。首建时间和磁盘增量必须单独报告，不能只用热查询表现宣称整体加速。旧格式归档的首次懒加载、很大的本轮内存消息，以及命中很多记录的查询仍有开销；索引不是语义检索，也不能从关键词结果自动推断事实或更正关系。
 
 运行中的搜索缓存能识别已经与原文一致的旧内存副本，外部更正或删除原文后不会再用该副本复活旧内容。但工作线程重启以后，如果宿主继续传入没有版本信息的旧消息，它与一次新的同 ID 编辑无法仅凭文字区分；此时仍按当前会话输入优先处理。索引不能代替宿主在外部更正历史后刷新会话快照。
+
+## Cross-session read contract
+
+`search_context({conversation_id, query})` targets one known local engine session. The SQLite worker searches persisted originals, and resident snapshots overlay just-received messages. `open:ev-...:offset` reads a bounded page using the same target. Evidence identities include the source session and content; stale or wrong-session handles do not return another record. Search does not switch the caller binding, hydrate a cold session, decompress history or change formal memory. Searchable data excludes reasoning, system messages, binary media and masked credentials. History never received by this engine is outside this index.

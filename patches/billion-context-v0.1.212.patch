@@ -604,15 +604,77 @@ index 00000000..5713b5f7
 +export async function cancelBackgroundFold(session: Session): Promise<void> {
 +    await backgroundFoldCancellations.get(session)?.();
 +}
+diff --git a/src/compress-tool.ts b/src/compress-tool.ts
+index df51bbbd..cd98237a 100644
+--- a/src/compress-tool.ts
++++ b/src/compress-tool.ts
+@@ -145,40 +145,41 @@ export function buildAcpTagsOnlyPrompt(
+     return full.slice(prefix.length);
+ }
+ 
+-// #1685 zero-injection identity: search_context's host-side
+-// conversation_id extension (#841/#760) is REMOVED — the model never sees a
+-// conversation id anymore, so it cannot cite one. Cross-session search keeps
+-// working for hosts that pass a target id out-of-band; the schema the model
+-// sees is the kernel constant, verbatim. The BILI_ copies stay as the
+-// served-shape anchor the wire-contract golden test pins.
++// Search targets do not change the caller's binding or mutation destination.
+ type JsonSchemaObject = { type: string; properties?: Record<string, unknown>; required?: string[] };
++const CROSS_SESSION_SEARCH_NOTE = ' Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or "current" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.';
++function withSearchTarget(schema: JsonSchemaObject): JsonSchemaObject {
++    return { ...schema, properties: { ...schema.properties, conversation_id: {
++        type: 'string', description: 'Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries.',
++    } } };
++}
+ 
+ export const BILI_SEARCH_CONTEXT_TOOL = {
+     name: SEARCH_CONTEXT_TOOL.name,
+-    description: SEARCH_CONTEXT_TOOL.description,
+-    input_schema: SEARCH_CONTEXT_TOOL.input_schema as JsonSchemaObject,
++    description: SEARCH_CONTEXT_TOOL.description + CROSS_SESSION_SEARCH_NOTE,
++    input_schema: withSearchTarget(SEARCH_CONTEXT_TOOL.input_schema),
+ };
+ 
+ export const BILI_SEARCH_CONTEXT_TOOL_OPENAI = {
+     type: "function" as const,
+     function: {
+         name: SEARCH_CONTEXT_TOOL_OPENAI.function.name,
+-        description: SEARCH_CONTEXT_TOOL_OPENAI.function.description,
+-        parameters: SEARCH_CONTEXT_TOOL_OPENAI.function.parameters as JsonSchemaObject,
++        description: SEARCH_CONTEXT_TOOL_OPENAI.function.description + CROSS_SESSION_SEARCH_NOTE,
++        parameters: withSearchTarget(SEARCH_CONTEXT_TOOL_OPENAI.function.parameters),
+     },
+ };
+ 
+ export const BILI_SEARCH_CONTEXT_TOOL_RESPONSES = {
+     type: "function" as const,
+     name: SEARCH_CONTEXT_TOOL_RESPONSES.name,
+-    description: SEARCH_CONTEXT_TOOL_RESPONSES.description,
+-    parameters: SEARCH_CONTEXT_TOOL_RESPONSES.parameters as JsonSchemaObject,
++    description: SEARCH_CONTEXT_TOOL_RESPONSES.description + CROSS_SESSION_SEARCH_NOTE,
++    parameters: withSearchTarget(SEARCH_CONTEXT_TOOL_RESPONSES.parameters),
+ };
+ 
+ export const BILI_SEARCH_CONTEXT_TOOL_GOOGLE = {
+     name: SEARCH_CONTEXT_TOOL_GOOGLE.name,
+-    description: SEARCH_CONTEXT_TOOL_GOOGLE.description,
+-    parameters: SEARCH_CONTEXT_TOOL_GOOGLE.parameters as JsonSchemaObject,
++    description: SEARCH_CONTEXT_TOOL_GOOGLE.description + CROSS_SESSION_SEARCH_NOTE,
++    parameters: withSearchTarget(SEARCH_CONTEXT_TOOL_GOOGLE.parameters),
+ };
+ 
+ // #1179 CCR v2: host-side range-restore extension of decompress. Optional
 diff --git a/src/decompress-shared.ts b/src/decompress-shared.ts
-index 005a2f24..1884c83b 100644
+index 005a2f24..347a20d8 100644
 --- a/src/decompress-shared.ts
 +++ b/src/decompress-shared.ts
-@@ -22,7 +22,8 @@ import { dirname, join, resolve as resolvePath } from "node:path";
+@@ -21,8 +21,9 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+ import { dirname, join, resolve as resolvePath } from "node:path";
  import { tmpdir } from "node:os";
  import { fileURLToPath } from "node:url";
- import { markDirty, preCompactionArchiveOf, peekSession, findSessionByCanonicalId, type Session } from "./session.js";
+-import { markDirty, preCompactionArchiveOf, peekSession, findSessionByCanonicalId, type Session } from "./session.js";
 -import { getStore } from "./persist.js";
++import { markDirty, preCompactionArchiveOf, peekSession, findSessionByCanonicalId, findUniqueSessionByCanonicalId, type Session } from "./session.js";
 +import { getStore, peekSearchableTranscript, peekIndexedSearch } from "./persist.js";
 +import { searchEvidence, searchEvidenceIndexed, type EvidenceIndexQuery } from "./search-evidence.js";
  import { ccrEnabled, contentStoreOf } from "./store.js";
@@ -651,7 +713,7 @@ index 005a2f24..1884c83b 100644
      const resident = self ?? undefined;
      const foreign = resolveForeignSessionState(requested);
      if (!foreign) return toolFail(`[search_context FAILED: unknown session "${requested}"]`);
-@@ -992,3 +1007,51 @@ export function executeSearchContextTarget(
+@@ -992,3 +1007,85 @@ export function executeSearchContextTarget(
      // originals are not reachable here; the search degrades to summaries.
      return executeSearchContext(args, core, foreign, requested, undefined, resident ? originalTextsOf(resident) : undefined);
  }
@@ -664,15 +726,49 @@ index 005a2f24..1884c83b 100644
 +): Promise<ProxyToolResult> {
 +    const requested = typeof args.conversation_id === "string" ? args.conversation_id.trim() : "";
 +    const own = !requested || requested === sessionId || requested.toLowerCase() === "current";
-+    const alias = !own ? peekSession(requested) ?? findSessionByCanonicalId(requested) : undefined;
-+    // Foreign sessions retain upstream's read-only scope (summaries and, for
-+    // resident sessions, folded originals); the worker stays own-session only.
-+    if ((!own && alias?.id !== sessionId) || !ctx || ctx.session.id !== sessionId) {
-+        return executeSearchContextTarget(args, core, sessionId, state);
-+    }
 +    const query = typeof args.query === "string" ? args.query.trim() : "";
 +    if (!query || query.length > 1024) return toolFail("[search_context FAILED: query is required (1–1024 characters)]");
 +    const limit = Number.isFinite(args.limit) && Number(args.limit) > 0 ? Math.min(12, Math.max(1, Math.floor(Number(args.limit)))) : 5;
++    let alias: Session | undefined;
++    let cold: { id: string; state: CompressionState } | null = null;
++    if (!own) {
++        try {
++            alias = peekSession(requested);
++            if (!alias) {
++                cold = getStore().loadTargetForSearch(requested);
++                if (cold?.id === requested) alias = peekSession(cold.id);
++                else {
++                    alias = findUniqueSessionByCanonicalId(requested);
++                    if (alias && cold && alias.id !== cold.id) throw Error("Ambiguous historical session alias");
++                    alias ??= cold ? peekSession(cold.id) : undefined;
++                }
++            }
++        } catch {
++            return toolFail("[search_context FAILED: historical session identity is ambiguous or unavailable; use the exact source conversation id and retry.]");
++        }
++    }
++    if (!own && alias?.id !== sessionId) {
++        try {
++            const target = alias ?? cold;
++            if (!target) return toolFail(`[search_context FAILED: unknown session ${JSON.stringify(requested)}]`);
++            if (target.id === sessionId && ctx?.session.id === sessionId) {
++                return executeSearchContextTargetAsync({ ...args, conversation_id: sessionId }, core, sessionId, state, ctx);
++            }
++            const local = executeSearchContext({ ...args, query, limit }, core, target.state, target.id);
++            const latest = alias?.transient?.pluginMessages?.original ?? alias?.pluginSnapshot ?? [];
++            const original = await searchEvidenceIndexed(target, query, limit, latest, ctx?.searchIndex ?? peekIndexedSearch,
++                alias?.contentStore, undefined, target.id);
++            if (original.startsWith("[Historical evidence search is temporarily unavailable")) return toolFail(original);
++            if (query.startsWith("open:") || original && local.text.startsWith("[No ")) return toolOk(original);
++            if (original) return toolOk(original + "\n\n" + safePrefix(local.text, 3500));
++            if (local.text.startsWith("[No ")) return toolOk(`[No historical evidence matched ${JSON.stringify(query)} in session ${JSON.stringify(target.id)}. A missing record is not evidence it never happened.]`);
++            return local;
++        } catch {
++            ctx?.log("[search_context] foreign indexed search unavailable; no source session was loaded or modified");
++            return toolFail("[search_context FAILED: cross-session historical evidence search is temporarily unavailable. No complete search was performed; retry later.]");
++        }
++    }
++    if (!ctx || ctx.session.id !== sessionId) return executeSearchContextTarget(args, core, sessionId, state);
 +    const plan: SearchPlanOpts | undefined = effectiveSearchPlanAware(ctx.session)
 +        ? { messages: ctx.messages, session: ctx.session, log: ctx.log, protectedPatterns: ctx.config.protectedLatestTools } : undefined;
 +    const local = executeSearchContext({ ...args, query, limit }, core, state, undefined, plan);
@@ -1014,10 +1110,26 @@ index b2417a92..1cfcd210 100644
      const input = typeof rawArguments === "string" && rawArguments.length > 0 ? rawArguments : args;
      return applyConfiguredCompression(input, ctx, callId, signal);
 diff --git a/src/persist.ts b/src/persist.ts
-index 8f4b9c89..d0daa199 100644
+index 8f4b9c89..fbac8066 100644
 --- a/src/persist.ts
 +++ b/src/persist.ts
-@@ -2264,6 +2264,19 @@ export class SessionStore {
+@@ -1941,6 +1941,15 @@ export class SessionStore {
+         }
+     }
+ 
++    /** Cold search target without loading a live Session or the complete transcript. */
++    loadTargetForSearch(id: string): { id: string; state: CompressionState } | null {
++        if (!this.enabled) return null;
++        const target = this.shadow?.targetForSearch(id);
++        if (target) return { id: target.id, state: mergeState(target.state as unknown as Parameters<typeof mergeState>[0]) };
++        const envelope = this.loadEnvelope(id);
++        return envelope ? { id: envelope.payload.id, state: mergeState(envelope.payload.state) } : null;
++    }
++
+     /** Read-only state load for cross-session search (#841): unlike loadSync,
+      *  never schedules a save (no #408 clamp-rewrite side effect). */
+     loadStateForSearch(id: string): CompressionState | null {
+@@ -2264,6 +2273,19 @@ export class SessionStore {
       *  transcript (msgId/ref/refNum/contentHash included) in seq order.
       *  Null when the unified store is unavailable — the render lane must
       *  degrade to the legacy path, never guess. */
@@ -1037,7 +1149,7 @@ index 8f4b9c89..d0daa199 100644
      unifiedTailViewRows(sessionId: string): import("./storage/store.js").MessageRow[] | null {
          if (!this.shadow || this.shadow.stats.disabled) return null;
          try {
-@@ -4116,6 +4129,17 @@ function peekStoreForStamp(): SessionStore | null {
+@@ -4116,6 +4138,17 @@ function peekStoreForStamp(): SessionStore | null {
   *  half-readable view. Rows are the raw client view caliber (#2627 — what a
   *  live model request would have re-sent), persisted on every save via the
   *  raw-tail ingest. */
@@ -1056,10 +1168,24 @@ index 8f4b9c89..d0daa199 100644
      const store = peekStoreForStamp();
      if (!store) return null;
 diff --git a/src/plugin.ts b/src/plugin.ts
-index 5b6578e7..48c5b993 100644
+index 5b6578e7..b8c50e97 100644
 --- a/src/plugin.ts
 +++ b/src/plugin.ts
-@@ -1989,9 +1989,9 @@ export async function handlePluginTool(
+@@ -904,11 +904,8 @@ export function handlePluginSessionName(payload: string, res: import("node:http"
+     res.end(JSON.stringify({ ok: true, conversationId }));
+ }
+ 
+-// #1685: the conversation_id tool parameter is GONE from the manifest — the
+-// model must never see or echo a conversation id (zero-injection identity:
+-// the proxy routes by outbound tool_use witness / body id / single-active
+-// arbitration; see tool-ring.ts). Wire-mode injection serves the kernel
+-// constants directly, which never carried the param.
++// Routing remains host/witness-bound. Only read-only search advertises a target
++// conversation_id; mutating tools cannot change their destination through args.
+ 
+ export function handlePluginManifest(res: import("node:http").ServerResponse, config: Config, toolPrompts?: ToolPrompts): void {
+     // #1192: hosts register whatever the manifest serves verbatim (pi/omp/dsh/
+@@ -1989,9 +1986,9 @@ export async function handlePluginTool(
      res: import("node:http").ServerResponse,
      deps: PluginToolDeps,
  ): Promise<void> {
@@ -1071,7 +1197,21 @@ index 5b6578e7..48c5b993 100644
          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("expected tool object");
      } catch {
          res.writeHead(400, { "content-type": "application/json" });
-@@ -2236,6 +2236,7 @@ export async function handlePluginTool(
+@@ -2203,11 +2200,8 @@ export async function handlePluginTool(
+     }
+     if (entry) entry.lastSeen = Date.now();
+     const args = parsed.args && typeof parsed.args === "object" ? { ...(parsed.args as Record<string, unknown>) } : {};
+-    // #760 legacy strip, kept for compat: the manifest no longer advertises a
+-    // conversation_id argument (#1685), but a model trained on the old schema
+-    // may still echo one — strip it before kernel arg parsing sees it (the
+-    // witness hash in tool-ring.ts strips the same key).
+-    delete args.conversation_id;
++    // A search target is read-only scope, never the caller's routing identity.
++    if (tool !== "search_context") delete args.conversation_id;
+     const callId = typeof parsed.toolCallId === "string" ? parsed.toolCallId : `${PLUGIN_FOLD_CALLID_PREFIX}${Date.now().toString(36)}`;
+     acquireInFlight(session);
+     let result: ProxyToolResult | undefined;
+@@ -2236,6 +2230,7 @@ export async function handlePluginTool(
              const compressBefore = session.lastCompress;
              const pendingBefore = new Set(session.pendingRetrievals.map((p) => p.ref));
              const toolResult = await executeProxyToolAsync(tool, args, {
@@ -1319,10 +1459,10 @@ index 00000000..b0d8d53c
 +}
 diff --git a/src/search-evidence.ts b/src/search-evidence.ts
 new file mode 100644
-index 00000000..f8921be5
+index 00000000..26252c3f
 --- /dev/null
 +++ b/src/search-evidence.ts
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,263 @@
 +import type { CoreMessage, MessageContentStore } from "acp-kernel";
 +import { parseStoredPlaceholder } from "acp-kernel";
 +import type { BiliMessage } from "acp-kernel/wire";
@@ -1340,7 +1480,7 @@ index 00000000..f8921be5
 +const preparedCache = new SearchLru<string, PreparedText & { source: string; attachment: string; sessionId: string }>();
 +const sessionKeys = new WeakMap<object, number>();
 +let sessionSequence = 0, preparedHits = 0, preparedMisses = 0;
-+function prepareText(session: Session, key: string, source: string, attachment = "", cache = true): PreparedText {
++function prepareText(session: Pick<Session, "id">, key: string, source: string, attachment = "", cache = true): PreparedText {
 +    // One-shot private replay material must not outlive its caller in this
 +    // process-wide cache. Keep exactly the same redaction and evidence IDs.
 +    if (!cache) return prepareSearchText(session.id, key, source, attachment);
@@ -1367,11 +1507,12 @@ index 00000000..f8921be5
 +        attachment:raw.attachment?.description || part?.description || part?.title || part?.filename || part?.alt || raw.imageMediaType };
 +}
 +
++export type EvidenceSession = Pick<Session, "id" | "state"> & Partial<Pick<Session, "lastMessages" | "blockContents">>;
 +export type EvidenceIndexQuery = (sessionId: string, query: string, limit: number, options?: SearchIndexOptions) => Promise<SearchIndexResult | null>;
 +
 +/** Production recall sends only the resident overlay and small block metadata to
 + * the worker. It never materializes the stored transcript on the host thread. */
-+export async function searchEvidenceIndexed(session: Session, query: string, limit: number, view: CoreMessage[], queryIndex: EvidenceIndexQuery, store?: MessageContentStore, observe?: (id: string, text: string) => void): Promise<string> {
++export async function searchEvidenceIndexed(session: EvidenceSession, query: string, limit: number, view: CoreMessage[], queryIndex: EvidenceIndexQuery, store?: MessageContentStore, observe?: (id: string, text: string) => void, foreignSessionId?: string): Promise<string> {
 +    const scoped = /^block:(b\d+)\s+(.+)$/is.exec(query);
 +    const target = scoped ? session.state.blocks.find(b => b.blockId === scoped[1]) : undefined;
 +    if (scoped && !target) return "[Unknown original-evidence block in this session.]";
@@ -1407,18 +1548,20 @@ index 00000000..f8921be5
 +    if (result?.missingArchiveBlocks?.length && !query.startsWith("open:")) {
 +        const missing = new Set(result.missingArchiveBlocks);
 +        const archives = session.state.blocks.filter(b => missing.has(b.blockId)).flatMap(b => {
-+            const full = session.blockContents.get(b.blockId)?.full;
++            const full = session.blockContents?.get(b.blockId)?.full;
 +            return full?.text ? [{ id: "archive/" + b.blockId, block: b.blockId, text: full.text, coveredIds: b.effectiveMessageIds }] : [];
 +        });
 +        if (archives.length) result = await queryIndex(session.id, scoped?.[2] ?? query, limit, { ...options, archives });
 +    }
 +    if (!result) return "[Historical evidence search is temporarily unavailable. No complete search was performed; this is not evidence that a record does not exist. Retry search_context later.]";
-+    return renderIndexedEvidence(session, query, limit, result, observe);
++    return renderIndexedEvidence(session, query, limit, result, observe, foreignSessionId);
 +}
 +
 +/** Render only the worker-selected rows. Neighbor maps describe actual source
 + * adjacency: two hits next to one another in this array are not neighbors. */
-+export function renderIndexedEvidence(session: Session, query: string, limit: number, result: SearchIndexResult, observe?: (id: string, text: string) => void): string {
++export function renderIndexedEvidence(session: EvidenceSession, query: string, limit: number, result: SearchIndexResult, observe?: (id: string, text: string) => void, foreignSessionId?: string): string {
++    const readHint = (query: string) => foreignSessionId ? "search_context(" + JSON.stringify({ conversation_id: foreignSessionId, query }) + ")" : query;
++    const scope = foreignSessionId ? "Read-only historical evidence in session " + JSON.stringify(foreignSessionId) : "Own-session historical evidence";
 +    const notes = new Map<string, Note>();
 +    const coverage = new Map<string, string>();
 +    const wanted = new Set(result.rows.map(r => r.id));
@@ -1448,7 +1591,7 @@ index 00000000..f8921be5
 +        if (n.offset !== undefined && n.offset !== offset) return "[Original evidence page changed during search; repeat the keyword search.]";
 +        const body = safePrefix(n.offset === undefined ? n.text.slice(offset) : n.text, pageSize);
 +        observe?.(n.key, body);
-+        return `[Evidence: ${cite(n)} | ${offset}–${offset + body.length}/${total}]\n${body}` + (offset + body.length < total ? `\n[next query: open:${n.evidence}:${offset + body.length}]` : "");
++        return `[Evidence: ${foreignSessionId ? "session=" + JSON.stringify(foreignSessionId) + " | " : ""}${cite(n)} | ${offset}–${offset + body.length}/${total}]\n${body}` + (offset + body.length < total ? `\n[next query: ${readHint(`open:${n.evidence}:${offset + body.length}`)}]` : "");
 +    }
 +    const text = (/^block:b\d+\s+(.+)$/is.exec(query)?.[1] ?? query).trim().toLowerCase();
 +    const terms = [...new Set(text.split(/\s+/))];
@@ -1468,13 +1611,15 @@ index 00000000..f8921be5
 +        });
 +        const correctedBy = (result.corrections[id] ?? []).flatMap(key => notes.get(key) ? [notes.get(key)!] : []);
 +        return [[cite(n), `  ${start ? "…" : ""}${safePrefix(snippet, 270)}`,
-+            `  read: open:${n.evidence}:${start}`,
++            `  read: ${readHint(`open:${n.evidence}:${start}`)}`,
 +            ...(n.corrects ? ["  corrects: " + clean(n.corrects).slice(0, 120)] : []),
 +            ...correctedBy.map(c => "  explicitly corrected by " + cite(c)), ...nearby].join("\n")];
 +    });
-+    for (const block of result.archiveMatches ?? []) lines.push(`${block} [flattened archive locator; original speaker/time unavailable], inspect block via decompress; no attributable quote.`);
++    for (const block of result.archiveMatches ?? []) lines.push(`${block} [flattened archive locator; original speaker/time unavailable], ${foreignSessionId ? "open the source session or export its archive" : "inspect block via decompress"}; no attributable quote.`);
 +    const warning = result.complete ? "" : "[Stored history coverage is incomplete; available recent messages were searched. A missing record is not evidence it never happened.]\n";
-+    return lines.length ? warning + `Own-session historical evidence (indexed keyword search; order and neighboring statements alone do not establish a correction):\n${lines.join("\n\n")}` : warning;
++    const archiveWarning = result.missingArchiveBlocks?.length
++        ? `[${result.missingArchiveBlocks.length} compressed range(s) lack typed original messages (${result.missingArchiveBlocks.slice(0, 8).join(", ")}); summaries and available archive locators do not prove complete original coverage.]\n` : "";
++    return lines.length ? warning + archiveWarning + `${scope} (indexed keyword search; order and neighboring statements alone do not establish a correction):\n${lines.join("\n\n")}` : warning + archiveWarning;
 +}
 +
 +function metadata(m: SearchTranscriptRow): string {
@@ -1675,7 +1820,7 @@ index 8f6b8738..a587335b 100644
              // less than its fixed cost — same economics as a zero-progress pass,
              // so arm the same cooldown instead of paying per-request for
 diff --git a/src/session.ts b/src/session.ts
-index dc5f83ac..c092ee95 100644
+index dc5f83ac..d066cc04 100644
 --- a/src/session.ts
 +++ b/src/session.ts
 @@ -4,7 +4,8 @@ import { log as loggerLog } from "./logger.js";
@@ -1701,7 +1846,26 @@ index dc5f83ac..c092ee95 100644
  }
  
  export function effectiveConfig(session: Session | undefined, fallback: Config): Config {
-@@ -1602,9 +1607,11 @@ export function snapshotMessages(session: Session, messages: CoreMessage[]): voi
+@@ -1588,6 +1593,18 @@ export function findSessionByCanonicalId(canonicalId: string): Session | undefin
+     return undefined;
+ }
+ 
++/** Search must never choose a different conversation by insertion order when
++ *  imported or legacy metadata contains a duplicated canonical id. */
++export function findUniqueSessionByCanonicalId(canonicalId: string): Session | undefined {
++    let found: Session | undefined;
++    for (const session of sessions.values()) {
++        if (canonicalIdOf(session) !== canonicalId) continue;
++        if (found) throw new Error("Ambiguous conversation_id: multiple resident conversations share this canonical id; use an exact conversation id.");
++        found = session;
++    }
++    return found;
++}
++
+ /** Overwrite the session's full-conversation snapshot with the latest client
+  *  raw request messages (originalMessages from prepare*). One array per
+  *  session, replaced every request — bounded, always the newest state. Empty
+@@ -1602,9 +1619,11 @@ export function snapshotMessages(session: Session, messages: CoreMessage[]): voi
  
  /** Mark a session's state as changed so it is persisted on the next debounce.
   *  Call this after any mutation (processTurn, compress, decompress, orphan GC). */
@@ -1923,10 +2087,10 @@ index 00000000..aa1b9023
 +}
 diff --git a/src/storage/search-index-engine.ts b/src/storage/search-index-engine.ts
 new file mode 100644
-index 00000000..2d7711c9
+index 00000000..097c8db6
 --- /dev/null
 +++ b/src/storage/search-index-engine.ts
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,385 @@
 +import { DatabaseSync } from "node:sqlite";
 +import { renameSync } from "node:fs";
 +import { safePrefix } from "../text-safe.js";
@@ -2304,8 +2468,12 @@ index 00000000..2d7711c9
 +            return { ...row, text: safePrefix(row.text ?? "", 200), attachment: safePrefix(row.attachment ?? "", 200),
 +                prepared: { text: safePrefix(prepared.text.slice(offset), 1600), evidence: prepared.evidence, totalChars: prepared.text.length, offset, matchAt: at } };
 +        });
++        // Read this within the same source snapshot as the indexed query. A
++        // vanished target (or an unsaved resident overlay) is not a complete,
++        // empty history merely because the database connection is still open.
++        const complete = this.source !== null && !!this.source.prepare("SELECT 1 FROM sessions WHERE session_id=?").get(sessionId);
 +        return { rows: compactRows, matchIds: hits.map(h => h.row.id), neighbors, corrections, tailId: actualTail?.id,
-+            archiveMatches, missingArchiveBlocks, revision, complete: this.source !== null, mode: this.fts ? "fts" : "scan", stats: { indexed, loaded: rows.size, matched, elapsedMs: performance.now() - started } };
++            archiveMatches, missingArchiveBlocks, revision, complete, mode: this.fts ? "fts" : "scan", stats: { indexed, loaded: rows.size, matched, elapsedMs: performance.now() - started } };
 +    }
 +}
 diff --git a/src/storage/search-index-journal.ts b/src/storage/search-index-journal.ts
@@ -2509,10 +2677,21 @@ index 00000000..a76fade9
 +    stats() { return { ...this.cache.stats(), hits: this.hits, loads: this.loads }; }
 +}
 diff --git a/src/storage/shadow.ts b/src/storage/shadow.ts
-index fddaaf27..71e507d0 100644
+index fddaaf27..19f7c5c3 100644
 --- a/src/storage/shadow.ts
 +++ b/src/storage/shadow.ts
-@@ -921,6 +921,16 @@ export class UnifiedShadow {
+@@ -631,6 +631,10 @@ export class UnifiedShadow {
+         }
+     }
+ 
++    targetForSearch(id: string): { id: string; state: Record<string, unknown> } | null {
++        return this.sync?.getTargetForSearch(id) ?? null;
++    }
++
+     /** Lazy resident fields share the same source header without rebuilding a session. */
+     readResidentFieldsFor(id: string, fields: { metadata?: boolean; blockContents?: boolean }): ResidentFields | null {
+         const store = this.sync;
+@@ -921,6 +925,16 @@ export class UnifiedShadow {
          return this.sync.uncoveredRows(sessionId, intervals);
      }
  
@@ -2530,7 +2709,7 @@ index fddaaf27..71e507d0 100644
          if (this.sync === null) return [];
          return this.sync.getMessages(sessionId);
 diff --git a/src/storage/store.ts b/src/storage/store.ts
-index ba6aed92..5d035316 100644
+index ba6aed92..1937cc85 100644
 --- a/src/storage/store.ts
 +++ b/src/storage/store.ts
 @@ -29,6 +29,10 @@ import { sqliteCorruptionDetail } from "./sqlite-errors.js";
@@ -2623,6 +2802,44 @@ index ba6aed92..5d035316 100644
      messageContentByRefNums(sessionId: string, refNums: readonly number[]): MessageRefContentRow[] {
          if (refNums.length === 0) return [];
          const nums = [...new Set(refNums)];
+@@ -2706,6 +2754,37 @@ export class UnifiedStore {
+         }
+     }
+ 
++    /** Search reads only identities, refs and compression metadata, never message CAS or tail bodies. */
++    getTargetForSearch(requested: string): { id: string; state: Record<string, unknown> } | null {
++        return this.readSnapshot(() => {
++            let id = requested;
++            const exact = this.db.prepare("SELECT 1 FROM sessions WHERE session_id=?").get(id);
++            if (!exact) {
++                if (!/^pfa-[a-f0-9]{16}$/.test(requested)) return null;
++                const rows = this.db.prepare("SELECT session_id, json_extract(metadata_json,'$.canonicalId') AS canonical FROM sessions").all() as { session_id: string; canonical: unknown }[];
++                const matches = rows.filter(row => {
++                    const alias = row.session_id.startsWith("pfa-") ? row.session_id : typeof row.canonical === "string" && row.canonical
++                        ? row.canonical : "pfa-" + createHash("sha256").update("legacy:" + row.session_id).digest("hex").slice(0, 16);
++                    return alias === requested;
++                });
++                if (matches.length > 1) throw new Error("Ambiguous conversation_id: multiple stored conversations share this canonical id; use an exact conversation id.");
++                if (matches.length === 0) return null;
++                id = matches[0]!.session_id;
++            }
++            const row = this.db.prepare("SELECT next_block_id,next_run_id,kstate_json FROM sessions WHERE session_id=?").get(id) as { next_block_id: number; next_run_id: number; kstate_json: string } | undefined;
++            if (!row) return null;
++            const byRaw: Record<string, string> = {}, byRef: Record<string, string> = {};
++            for (const ref of this.getRefs(id)) {
++                byRaw[ref.rawId] = ref.ref;
++                if (ref.ref !== "BLOCKED" && byRef[ref.ref] === undefined) byRef[ref.ref] = ref.rawId;
++            }
++            const blocks = this.db.prepare("SELECT payload_json FROM blocks WHERE session_id=? ORDER BY ord,block_id").all(id) as { payload_json: string }[];
++            const deadRefs = this.getDeadRefs(id).map(ref => ref.ref);
++            return { id, state: { ...JSON.parse(row.kstate_json), nextBlockId: row.next_block_id, nextRunId: row.next_run_id,
++                messageRefs: { byRaw, byRef }, deadRefs: deadRefs.length ? deadRefs : undefined, blocks: blocks.map(block => JSON.parse(block.payload_json)) } };
++        });
++    }
++
+     getMetadataJson(sessionId: string): string | null {
+         const row = this.db.prepare("SELECT metadata_json FROM sessions WHERE session_id = ?")
+             .get(sessionId) as { metadata_json: string } | undefined;
 diff --git a/src/stream.ts b/src/stream.ts
 index 2979f840..8cc72168 100644
 --- a/src/stream.ts
@@ -2665,6 +2882,19 @@ index 6fc46fce..57e0c306 100644
      // pi terminal extension: folds tool output / re-lays AssistantMessage rendering,
      // registers display toggles; README states "changes display only" — no context
      // replacement or compression handler (#2324).
+diff --git a/src/tool-ring.ts b/src/tool-ring.ts
+index e4ef6aec..8f626b75 100644
+--- a/src/tool-ring.ts
++++ b/src/tool-ring.ts
+@@ -76,7 +76,7 @@ export function witnessHash(name: string, args: unknown): string {
+     const parsed = JSON.parse(canonicalArgs);
+     if (parsed === null || typeof parsed !== "object") return "";
+     const obj = parsed as Record<string, unknown>;
+-    if ("conversation_id" in obj) {
++    if ("conversation_id" in obj && normalizeToolName(name) !== "search_context") {
+         delete obj.conversation_id;
+         canonicalArgs = stableStringify(obj);
+     }
 diff --git a/tests/check-dist-external.test.ts b/tests/check-dist-external.test.ts
 index 60a06a62..d18986ea 100644
 --- a/tests/check-dist-external.test.ts
@@ -3271,6 +3501,19 @@ index 3398fe1f..b75915df 100644
 +        rmSync(dir, { recursive: true, force: true });
 +    }
 +});
+diff --git a/tests/decompress-empty-range.test.ts b/tests/decompress-empty-range.test.ts
+index 0011e1fb..339183a0 100644
+--- a/tests/decompress-empty-range.test.ts
++++ b/tests/decompress-empty-range.test.ts
+@@ -149,7 +149,7 @@ test("#1712: with-range arrays expose optional startId/endId; NO_RANGE variants
+         assert.equal(nr.endId, undefined, "NO_RANGE drops endId");
+         assert.deepEqual(namesOf(noRange as unknown[]), namesOf(withRange as unknown[]), "tool set otherwise identical");
+         const sc = propsOf(noRange as unknown[], SEARCH_CONTEXT_TOOL_NAME);
+-        assert.equal(sc?.conversation_id, undefined, "#1685 zero-injection: search_context carries no conversation_id");
++        assert.equal(sc?.conversation_id?.type, "string", "read-only search target survives no-range manifests");
+     }
+ });
+ 
 diff --git a/tests/dsh-native.test.ts b/tests/dsh-native.test.ts
 index d1c76b43..6095a772 100644
 --- a/tests/dsh-native.test.ts
@@ -3413,7 +3656,7 @@ index d1c76b43..6095a772 100644
 +    }
 +});
 diff --git a/tests/golden/wire-contract/bili.json b/tests/golden/wire-contract/bili.json
-index 551ec373..ac91d0da 100644
+index 551ec373..30599b0f 100644
 --- a/tests/golden/wire-contract/bili.json
 +++ b/tests/golden/wire-contract/bili.json
 @@ -52,7 +52,7 @@
@@ -3421,82 +3664,181 @@ index 551ec373..ac91d0da 100644
        {
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
          "input_schema": {
            "type": "object",
            "properties": {
-@@ -156,7 +156,7 @@
+@@ -63,6 +63,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
+@@ -156,7 +160,7 @@
          "type": "function",
          "function": {
            "name": "search_context",
 -          "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+          "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++          "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
            "parameters": {
              "type": "object",
              "properties": {
-@@ -262,7 +262,7 @@
+@@ -167,6 +171,10 @@
+               "limit": {
+                 "type": "number",
+                 "description": "Max results (default 5)"
++              },
++              "conversation_id": {
++                "type": "string",
++                "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+               }
+             },
+             "required": [
+@@ -262,7 +270,7 @@
        {
          "type": "function",
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
          "parameters": {
            "type": "object",
            "properties": {
-@@ -360,7 +360,7 @@
+@@ -273,6 +281,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
+@@ -360,7 +372,7 @@
        },
        {
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
          "parameters": {
            "type": "object",
            "properties": {
-@@ -428,7 +428,7 @@
+@@ -371,6 +383,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
+@@ -428,7 +444,7 @@
        {
          "type": "function",
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
          "parameters": {
            "type": "object",
            "properties": {
-@@ -478,7 +478,7 @@
+@@ -439,6 +455,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
+@@ -478,7 +498,7 @@
    "extended": {
      "searchContextAnthropic": {
        "name": "search_context",
 -      "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+      "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++      "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
        "input_schema": {
          "type": "object",
          "properties": {
-@@ -500,7 +500,7 @@
+@@ -489,6 +509,10 @@
+           "limit": {
+             "type": "number",
+             "description": "Max results (default 5)"
++          },
++          "conversation_id": {
++            "type": "string",
++            "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+           }
+         },
+         "required": [
+@@ -500,7 +524,7 @@
        "type": "function",
        "function": {
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
          "parameters": {
            "type": "object",
            "properties": {
-@@ -522,7 +522,7 @@
+@@ -511,6 +535,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
+@@ -522,7 +550,7 @@
      "searchContextResponses": {
        "type": "function",
        "name": "search_context",
 -      "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+      "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++      "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
        "parameters": {
          "type": "object",
          "properties": {
-@@ -542,7 +542,7 @@
+@@ -533,6 +561,10 @@
+           "limit": {
+             "type": "number",
+             "description": "Max results (default 5)"
++          },
++          "conversation_id": {
++            "type": "string",
++            "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+           }
+         },
+         "required": [
+@@ -542,7 +574,7 @@
      },
      "searchContextGoogle": {
        "name": "search_context",
 -      "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
-+      "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence.",
++      "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened.",
        "parameters": {
          "type": "object",
          "properties": {
+@@ -553,6 +585,10 @@
+           "limit": {
+             "type": "number",
+             "description": "Max results (default 5)"
++          },
++          "conversation_id": {
++            "type": "string",
++            "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+           }
+         },
+         "required": [
 diff --git a/tests/golden/wire-contract/kernel.json b/tests/golden/wire-contract/kernel.json
 index 6a83a55b..04a06c62 100644
 --- a/tests/golden/wire-contract/kernel.json
@@ -3583,7 +3925,7 @@ index 6a83a55b..04a06c62 100644
          "type": "object",
          "properties": {
 diff --git a/tests/golden/wire-contract/manifest-default.json b/tests/golden/wire-contract/manifest-default.json
-index 1ddfeb76..b19cb88f 100644
+index 1ddfeb76..ddcbc7b7 100644
 --- a/tests/golden/wire-contract/manifest-default.json
 +++ b/tests/golden/wire-contract/manifest-default.json
 @@ -57,7 +57,7 @@
@@ -3591,30 +3933,63 @@ index 1ddfeb76..b19cb88f 100644
        {
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
          "input_schema": {
            "type": "object",
            "properties": {
-@@ -169,7 +169,7 @@
+@@ -68,6 +68,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
+@@ -169,7 +173,7 @@
          "type": "function",
          "function": {
            "name": "search_context",
 -          "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
-+          "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
++          "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
            "parameters": {
              "type": "object",
              "properties": {
-@@ -286,7 +286,7 @@
+@@ -180,6 +184,10 @@
+               "limit": {
+                 "type": "number",
+                 "description": "Max results (default 5)"
++              },
++              "conversation_id": {
++                "type": "string",
++                "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+               }
+             },
+             "required": [
+@@ -286,7 +294,7 @@
        {
          "type": "function",
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
          "parameters": {
            "type": "object",
            "properties": {
+@@ -297,6 +305,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
 diff --git a/tests/golden/wire-contract/manifest-optin.json b/tests/golden/wire-contract/manifest-optin.json
-index 0e54b442..8e56ccad 100644
+index 0e54b442..38f13422 100644
 --- a/tests/golden/wire-contract/manifest-optin.json
 +++ b/tests/golden/wire-contract/manifest-optin.json
 @@ -68,7 +68,7 @@
@@ -3622,33 +3997,151 @@ index 0e54b442..8e56ccad 100644
        {
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
          "input_schema": {
            "type": "object",
            "properties": {
-@@ -246,7 +246,7 @@
+@@ -79,6 +79,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
+@@ -246,7 +250,7 @@
          "type": "function",
          "function": {
            "name": "search_context",
 -          "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
-+          "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
++          "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
            "parameters": {
              "type": "object",
              "properties": {
-@@ -430,7 +430,7 @@
+@@ -257,6 +261,10 @@
+               "limit": {
+                 "type": "number",
+                 "description": "Max results (default 5)"
++              },
++              "conversation_id": {
++                "type": "string",
++                "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+               }
+             },
+             "required": [
+@@ -430,7 +438,7 @@
        {
          "type": "function",
          "name": "search_context",
 -        "description": "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
-+        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
++        "description": "Search this conversation’s visible and archived message text, attachment descriptions and summaries by keyword. Follow the returned refs or open: query to read original evidence. Searches indexed original messages, summaries and attachment descriptions. To search another known local session, pass its conversation_id; omitted or \"current\" means this session. To read more, pass the returned open:ev-...:offset as query with the SAME conversation_id. Foreign reads are read-only; never use their refs with current-session decompress/acp_retrieve. Only history received by this local engine is available; a missing match does not prove it never happened. Calling convention: if this environment only allows `run_code` to be called directly (code-mode/PTC harness), call this tool from inside a run_code program via the harness's generated SDK; otherwise call it directly as a tool.",
          "parameters": {
            "type": "object",
            "properties": {
+@@ -441,6 +449,10 @@
+             "limit": {
+               "type": "number",
+               "description": "Max results (default 5)"
++            },
++            "conversation_id": {
++              "type": "string",
++              "description": "Optional known local target session ID or canonical conversation ID. Read-only search/read scope, not a change to the current session. Keep this value on subsequent open: queries."
+             }
+           },
+           "required": [
+diff --git a/tests/issue760-percall-conversation.test.ts b/tests/issue760-percall-conversation.test.ts
+index 9c5d48d7..2a819f0c 100644
+--- a/tests/issue760-percall-conversation.test.ts
++++ b/tests/issue760-percall-conversation.test.ts
+@@ -171,7 +171,7 @@ function canonicalOf(sessionId: string): string {
+     return `pfa-${createHash("sha256").update(`legacy:${sessionId}`).digest("hex").slice(0, 16)}`;
+ }
+ 
+-test("plugin manifest advertises NO conversation_id in any tool format (#1685 zero-injection)", async () => {
++test("plugin manifest advertises a read-only search target, never a mutation routing override", async () => {
+     const rig = await startRig();
+     try {
+         const res = await fetch(rig.proxyUrl("/__bili/plugin/manifest"));
+@@ -184,7 +184,10 @@ test("plugin manifest advertises NO conversation_id in any tool format (#1685 ze
+             for (const t of tools) {
+                 const schema = schemaOf(t);
+                 assert.ok(schema?.properties, `${format}/${(t as { name?: string }).name}: has properties`);
+-                assert.equal((schema!.properties as Record<string, unknown>).conversation_id, undefined, `${format}/${(t as { name?: string }).name}: conversation_id NOT advertised (#1685)`);
++                const entry = t as { name?: string; function?: { name?: string } };
++                const target = (schema!.properties as Record<string, {type?:string}>).conversation_id;
++                if ((entry.name ?? entry.function?.name) === "search_context") assert.equal(target?.type, "string");
++                else assert.equal(target, undefined, `${format}: mutation tools cannot target another session`);
+                 assert.ok(!(schema!.required ?? []).includes("conversation_id"), `${format}: conversation_id not required`);
+             }
+         }
+@@ -335,9 +338,10 @@ test("shared shim, no env/meta id: per-call ids route two sessions independently
+         h.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+         h.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+         await waitFor(() => h.lines.length >= 2, "initialize + tools/list responses");
+-        const tools = byId(h.lines, 2) as { result?: { tools?: { inputSchema?: { properties?: Record<string, unknown> } }[] } };
++        const tools = byId(h.lines, 2) as { result?: { tools?: { name?: string; inputSchema?: { properties?: Record<string, { type?: string }> } }[] } };
+         for (const t of tools.result?.tools ?? []) {
+-            assert.equal(t.inputSchema?.properties?.conversation_id, undefined, `shim does NOT expose conversation_id (#1685): ${JSON.stringify(t.inputSchema?.properties ?? {})}`);
++            if (t.name === "search_context") assert.equal(t.inputSchema?.properties?.conversation_id?.type, "string", "shim exposes only the read-only search target");
++            else assert.equal(t.inputSchema?.properties?.conversation_id, undefined, "shim does not expose mutating routing identity");
+         }
+ 
+         // Session A exists; a per-call id (legacy model echo of the pre-#1685
+diff --git a/tests/plugin-protocol.test.ts b/tests/plugin-protocol.test.ts
+index 3deba4eb..6e5d7a77 100644
+--- a/tests/plugin-protocol.test.ts
++++ b/tests/plugin-protocol.test.ts
+@@ -256,11 +256,11 @@ test("plugin manifest serves the exact wire tool schemas, headers and version",
+                 return t.name === "search_context" || (fn !== null && typeof fn === "object" && fn.name === "search_context");
+             });
+         const anthropicProps = ((searchEntry("anthropic")?.input_schema ?? {}) as { properties?: Record<string, unknown> }).properties;
+-        assert.equal(anthropicProps?.conversation_id, undefined, "#1685: no conversation_id advertised (anthropic)");
++        assert.equal((anthropicProps?.conversation_id as {type?:string})?.type, "string", "read-only target advertised (anthropic)");
+         const openaiProps = (((searchEntry("openai")?.function ?? {}) as { parameters?: { properties?: Record<string, unknown> } }).parameters?.properties);
+-        assert.equal(openaiProps?.conversation_id, undefined, "#1685: no conversation_id advertised (openai)");
++        assert.equal((openaiProps?.conversation_id as {type?:string})?.type, "string", "read-only target advertised (openai)");
+         const responsesProps = ((searchEntry("responses")?.parameters ?? {}) as { properties?: Record<string, unknown> }).properties;
+-        assert.equal(responsesProps?.conversation_id, undefined, "#1685: no conversation_id advertised (responses)");
++        assert.equal((responsesProps?.conversation_id as {type?:string})?.type, "string", "read-only target advertised (responses)");
+         assert.equal(manifest.headers.agent, "x-bili-plugin");
+         assert.equal(manifest.headers.conversation, "x-bili-plugin-conversation");
+         assert.equal(manifest.toolEndpoint, "/__bili/plugin/tool");
 diff --git a/tests/search-context-cross-session.test.ts b/tests/search-context-cross-session.test.ts
-index 9a5647f4..92232734 100644
+index 9a5647f4..7c3ad29f 100644
 --- a/tests/search-context-cross-session.test.ts
 +++ b/tests/search-context-cross-session.test.ts
-@@ -187,13 +187,15 @@ test("#841 resident historical session served from memory without disk", () => {
+@@ -61,7 +61,7 @@ function paramsOf(entry: FlatTool): Record<string, unknown> {
+     return entry.parameters ?? entry.input_schema ?? entry.function?.parameters ?? {};
+ }
+ 
+-test("#841 schema: BILI arrays no longer add conversation_id to search_context (#1685); #1179 range args stay on decompress", () => {
++test("custom search schema: optional foreign read target; kernel and mutating tools stay unchanged", () => {
+     const cases: [readonly unknown[], readonly unknown[], "flat" | "openai"][] = [
+         [BILI_ACP_TOOLS_ANTHROPIC, ACP_TOOLS_ANTHROPIC, "flat"],
+         [BILI_ACP_TOOLS_OPENAI, ACP_TOOLS_OPENAI, "openai"],
+@@ -71,7 +71,8 @@ test("#841 schema: BILI arrays no longer add conversation_id to search_context (
+         const entry = searchEntry(bili, shape);
+         assert.ok(entry, `search_context missing in ${shape} array`);
+         const props = paramsOf(entry).properties as Record<string, Record<string, unknown>>;
+-        assert.equal(props.conversation_id, undefined, "#1685: conversation_id NOT advertised (zero-injection)");
++        assert.equal(props.conversation_id?.type, "string");
++        assert.match(String(props.conversation_id?.description), /[Rr]ead-only/);
+         const required = paramsOf(entry).required as string[];
+         assert.ok(!required.includes("conversation_id"), "conversation_id must stay out of required");
+ 
+@@ -112,7 +113,7 @@ test("#841 schema: BILI arrays no longer add conversation_id to search_context (
+         assert.deepEqual(biliRest, kernelRest, "no other tool may change");
+     }
+     const ro = searchEntry(BILI_ACP_READONLY_TOOLS_RESPONSES, "flat")!;
+-    assert.equal((paramsOf(ro).properties as Record<string, unknown>).conversation_id, undefined, "#1685: readonly array clean too");
++    assert.equal(((paramsOf(ro).properties as Record<string, {type:string}>).conversation_id).type, "string", "readonly search exposes target");
+     assert.equal((paramsOf(searchEntry(ACP_READONLY_TOOLS_RESPONSES, "flat")!).properties as Record<string, unknown>).conversation_id, undefined, "kernel readonly constant must not be mutated");
+ });
+ 
+@@ -187,13 +188,15 @@ test("#841 resident historical session served from memory without disk", () => {
  test("#841 cold-loaded historical session: read-only, file untouched, no save scheduled", async () => {
      _resetSessionsForTest();
      const dir = mkdtempSync(path.join(tmpdir(), "bili-xsearch-"));
@@ -3666,7 +4159,7 @@ index 9a5647f4..92232734 100644
          await reader.boot();
          _setStoreForTest(reader);
  
-@@ -219,6 +221,8 @@ test("#841 cold-loaded historical session: read-only, file untouched, no save sc
+@@ -219,6 +222,8 @@ test("#841 cold-loaded historical session: read-only, file untouched, no save sc
      } finally {
          _setStoreForTest(new SessionStore({ enabled: false }));
          _resetSessionsForTest();
@@ -3675,6 +4168,251 @@ index 9a5647f4..92232734 100644
          rmrf(dir);
      }
  });
+diff --git a/tests/search-cross-session-indexed.test.ts b/tests/search-cross-session-indexed.test.ts
+new file mode 100644
+index 00000000..332fd4f0
+--- /dev/null
++++ b/tests/search-cross-session-indexed.test.ts
+@@ -0,0 +1,239 @@
++import test, { type TestContext } from "node:test";
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { createHash } from "node:crypto";
++import type { ServerResponse } from "node:http";
++import { createCore, defaultConfig, type CoreMessage } from "acp-kernel";
++import { executeSearchContextTargetAsync } from "../src/decompress-shared.js";
++import { SessionStore, _setStoreForTest } from "../src/persist.js";
++import { _resetSessionsForTest, ensureCanonicalId, getSession, peekSession } from "../src/session.js";
++import { openSqliteDatabase, type SqliteDatabase } from "../src/storage/driver.js";
++import { UnifiedStore } from "../src/storage/store.js";
++import type { EvidenceIndexQuery } from "../src/search-evidence.js";
++import { _resetPluginStateForTest, handlePluginTool, type PluginToolDeps } from "../src/plugin.js";
++
++type PublicMessage = CoreMessage & { timestamp?: number; attachment?: { description: string }; source?: { kind: string } };
++const msg = (id: string, text: string, extra: Partial<PublicMessage> = {}): PublicMessage => ({ id, role: "user", contentType: "text", text, ...extra });
++const sourceDigest = (db: SqliteDatabase) => createHash("sha256").update(JSON.stringify({
++    sessions: db.prepare("SELECT * FROM sessions ORDER BY session_id").all(),
++    messages: db.prepare("SELECT * FROM messages ORDER BY session_id,seq").all(),
++    content: db.prepare("SELECT hash,byte_len,hex(bytes) AS bytes FROM content ORDER BY hash").all(),
++})).digest("hex");
++
++async function fixture(t: TestContext) {
++    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bili-cross-indexed-"));
++    const priorMode = process.env.BILI_STORAGE_UNIFIED, priorConfig = process.env.BILI_CONFIG_FILE;
++    process.env.BILI_STORAGE_UNIFIED = "full";
++    process.env.BILI_CONFIG_FILE = path.join(dir, "no-config.json");
++    _resetSessionsForTest();
++    const store = new SessionStore({ dir, enabled: true, debounceMs: 60_000 });
++    _setStoreForTest(store);
++    const old = getSession("cross-indexed-old");
++    old.lastMessages = [];
++    const alias = ensureCanonicalId(old);
++    old.metadata.canonicalId = alias;
++    await store.writeNow(old);
++    const db = openSqliteDatabase(path.join(dir, "index.db")).db;
++    t.after(async () => {
++        _resetSessionsForTest(); _setStoreForTest(new SessionStore({ enabled: false }));
++        db.close(); await store.closeQuietlyAsync();
++        if (priorMode === undefined) delete process.env.BILI_STORAGE_UNIFIED; else process.env.BILI_STORAGE_UNIFIED = priorMode;
++        if (priorConfig === undefined) delete process.env.BILI_CONFIG_FILE; else process.env.BILI_CONFIG_FILE = priorConfig;
++        const target = path.resolve(dir), root = path.resolve(os.tmpdir()) + path.sep;
++        assert.ok(target.startsWith(root) && path.basename(target).startsWith("bili-cross-indexed-"));
++        fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
++    });
++    const current = getSession("cross-indexed-current");
++    const core = createCore(), config = defaultConfig(200_000);
++    const run = async (query: string, target = old.id, queryIndex?: EvidenceIndexQuery) => executeSearchContextTargetAsync(
++        { query, conversation_id: target, limit: 5 }, core, current.id, current.state,
++        { session: current, config, messages: current.lastMessages ?? [], log() {}, ...(queryIndex ? { searchIndex: queryIndex } : {}) },
++    );
++    return { dir, store, db, old, current, alias, run };
++}
++
++function readHandle(text: string): string {
++    const handle = text.match(/open:ev-[a-f0-9]{24}:\d+/)?.[0];
++    assert.ok(handle, "search must expose a version-bound paginated original-read handle");
++    return handle;
++}
++
++test("cold foreign full history uses SQLite FTS, including two-character names and parameters, without loading or modifying the session", async t => {
++    const f = await fixture(t);
++    f.old.lastMessages = Array.from({ length: 1200 }, (_, i) => msg("row-" + i, "旧记录 " + i + "：普通阅读资料。".repeat(20), { timestamp: 1793788800000 + i * 1000 }));
++    const original = "岑舒与青枔确认 preserveRecentTokens=32000，路径 E:/workspace/config.json；" + "旧资料段落。".repeat(700) + "原文末尾线索";
++    f.old.lastMessages![900] = msg("row-900", original, { timestamp: 1793789700000 });
++    await f.store.writeNow(f.old);
++    f.store.cancelAll();
++    _resetSessionsForTest();
++    assert.equal(peekSession(f.old.id), undefined);
++    const before = sourceDigest(f.db), currentBefore = JSON.stringify(f.current.state);
++    const noLoad = t.mock.method(f.store, "loadSync", () => { throw Error("search may not hydrate a foreign runtime Session"); });
++    const noSave = t.mock.method(f.store, "scheduleSave", () => { throw Error("read-only search may not schedule a save"); });
++    const noMessages = t.mock.method(UnifiedStore.prototype, "getMessages", () => { throw Error("cold identity lookup must not hydrate message bodies"); });
++    const noBlocks = t.mock.method(UnifiedStore.prototype, "getBlocks", () => { throw Error("cold identity lookup must not hydrate block CAS"); });
++    const noCcr = t.mock.method(UnifiedStore.prototype, "getCcr", () => { throw Error("cold identity lookup must not hydrate CCR"); });
++    for (const query of ["岑舒", "青枔", "RecentTokens", "32000", "E:/workspace/config.json"]) {
++        const out = await f.run(query);
++        assert.match(out.text, /row-900/); assert.match(out.text, /cross-indexed-old/);
++    }
++    const first = (await f.run("岑舒")).text, handle = readHandle(first);
++    assert.match(first, /conversation_id/);
++    assert.match(first, /cross-indexed-old/);
++    const opened = await f.run(handle);
++    assert.match(opened.text, /岑舒与青枔确认 preserveRecentTokens=32000/);
++    assert.match(opened.text, /next/);
++    assert.ok(opened.text.length < 2300, "read output must remain paginated");
++    const next = readHandle(opened.text);
++    assert.notEqual(next, handle);
++    const page2 = await f.run(next);
++    assert.match(page2.text, /旧资料段落/);
++    assert.doesNotMatch(page2.text, /岑舒与青枔确认 preserveRecentTokens/);
++    assert.match((await f.run("青枔", f.alias)).text, /row-900/);
++    assert.equal(noLoad.mock.callCount(), 0); assert.equal(noSave.mock.callCount(), 0);
++    assert.equal(noMessages.mock.callCount(), 0); assert.equal(noBlocks.mock.callCount(), 0); assert.equal(noCcr.mock.callCount(), 0);
++    assert.equal(peekSession(f.old.id), undefined);
++    assert.equal(f.store.hasPending(f.old.id), false);
++    assert.equal(sourceDigest(f.db), before, "derived index writes must not mutate original rows");
++    assert.equal(JSON.stringify(f.current.state), currentBefore);
++});
++
++test("resident foreign just-sent messages and edits override disk while caller and identical IDs stay isolated", async t => {
++    const f = await fixture(t);
++    f.old.lastMessages = [msg("shared-id", "岑舒原先设置 oldValue=100")];
++    await f.store.writeNow(f.old);
++    f.old.lastMessages = [msg("shared-id", "岑舒刚改成 newValue=200"), msg("unsaved", "青枔刚发送 liveForeign=321", { timestamp: 1793799999000 })];
++    f.current.lastMessages = [msg("shared-id", "caller-only-private"), msg("unsaved", "caller-liveForeign=999")];
++    const before = { state: JSON.stringify(f.old.state), metadata: JSON.stringify(f.old.metadata), epoch: f.old.revisionEpoch, seen: f.old.lastSeen, requests: f.old.stats.requests };
++    const out = await f.run("liveForeign");
++    assert.match(out.text, /青枔刚发送 liveForeign=321/);
++    assert.doesNotMatch(out.text, /caller-only-private|caller-liveForeign=999/);
++    assert.match((await f.run("newValue")).text, /newValue=200/);
++    assert.doesNotMatch((await f.run("oldValue")).text, /oldValue=100/);
++    const handle = readHandle(out.text);
++    assert.match((await f.run(handle)).text, /liveForeign=321/);
++    assert.doesNotMatch((await f.run(handle, f.current.id)).text, /liveForeign=321/);
++    f.old.lastMessages[1]!.text = "青枔改了主意 liveForeign=654";
++    assert.match((await f.run(handle)).text, /unavailable or changed/);
++    const replacement = await f.run("liveForeign");
++    const updatedHandle = readHandle(replacement.text);
++    f.old.lastMessages.pop();
++    assert.match((await f.run(updatedHandle)).text, /unavailable or changed/);
++    assert.equal(JSON.stringify(f.old.state), before.state); assert.equal(JSON.stringify(f.old.metadata), before.metadata);
++    assert.equal(f.old.revisionEpoch, before.epoch); assert.equal(f.old.lastSeen, before.seen); assert.equal(f.old.stats.requests, before.requests);
++});
++
++test("cold foreign evidence handles detect changed or deleted source and fresh persisted arrivals", async t => {
++    const f = await fixture(t);
++    f.old.lastMessages = [msg("row-1", "青枔旧值 parameter=111")];
++    await f.store.writeNow(f.old); _resetSessionsForTest();
++    const first = await f.run("parameter"), handle = readHandle(first.text);
++    const row = f.db.prepare("SELECT content_hash FROM messages WHERE session_id=? AND msg_id=? AND retired_at IS NULL").get(f.old.id, "row-1") as { content_hash: string };
++    const bytes = Buffer.from(JSON.stringify(msg("row-1", "青枔新值 parameter=222")));
++    f.db.prepare("UPDATE content SET bytes=?,byte_len=? WHERE hash=?").run(bytes, bytes.length, row.content_hash);
++    assert.match((await f.run(handle)).text, /unavailable or changed/);
++    const changed = await f.run("parameter=222"); assert.match(changed.text, /青枔新值 parameter=222/);
++    const changedHandle = readHandle(changed.text);
++    f.db.prepare("DELETE FROM messages WHERE session_id=? AND msg_id=?").run(f.old.id, "row-1");
++    assert.match((await f.run(changedHandle)).text, /unavailable or changed/);
++    const newest = Buffer.from(JSON.stringify(msg("persisted-arrival", "新到磁盘：青枔 freshDisk=987")));
++    const hash = createHash("sha256").update(newest).digest("hex");
++    f.db.prepare("INSERT INTO content(hash,byte_len,bytes) VALUES(?,?,?)").run(hash, newest.length, newest);
++    f.db.prepare("INSERT INTO messages(session_id,seq,msg_id,role,kind,content_hash) VALUES(?,?,?,?,?,?)").run(f.old.id, 900, "persisted-arrival", "user", "text", hash);
++    assert.match((await f.run("freshDisk")).text, /persisted-arrival[\s\S]*freshDisk=987/);
++});
++
++test("foreign FTS redacts secrets and private roles but keeps public attachment descriptions", async t => {
++    const f = await fixture(t);
++    f.old.lastMessages = [
++        msg("public", "public-record token=synthetic___123456789"),
++        msg("thinking", "private-reasoning-needle", { role: "assistant", contentType: "reasoning" }),
++        msg("system", "private-system-needle", { role: "system" }),
++        msg("image", "[image]", { attachment: { description: "紫色窗格附件说明" }, role: "tool" }),
++    ];
++    await f.store.writeNow(f.old); _resetSessionsForTest();
++    assert.doesNotMatch((await f.run("private-")).text, /private-reasoning-needle|private-system-needle/);
++    const publicHit = await f.run("public-record");
++    assert.match(publicHit.text, /public-record/); assert.doesNotMatch(publicHit.text, /synthetic___123456789/);
++    assert.doesNotMatch((await f.run(readHandle(publicHit.text))).text, /synthetic___123456789/);
++    assert.match((await f.run("紫色窗格")).text, /image[\s\S]*紫色窗格附件说明/);
++});
++
++test("foreign index errors do not silently return summary-only success or read caller context", async t => {
++    const f = await fixture(t);
++    f.old.lastMessages = [msg("foreign", "target public text")];
++    f.current.lastMessages = [msg("caller", "caller-secret-marker")];
++    let seen = "";
++    const fail: EvidenceIndexQuery = async (id, _q, _n, opts) => {
++        seen = id;
++        assert.ok(opts?.overlays?.every(row => !row.text?.includes("caller-secret-marker")));
++        return null;
++    };
++    const out = await f.run("public", f.old.id, fail);
++    assert.equal(seen, f.old.id);
++    assert.match(out.text, /temporarily unavailable/i);
++    assert.doesNotMatch(out.text, /no.*matched|caller-secret-marker/i);
++    seen = "";
++    assert.match((await f.run("public", "missing-foreign-session", fail)).text, /unknown session/);
++    assert.equal(seen, "", "unknown target must not query caller or guessed indexes");
++});
++
++test("resident native-host snapshot provides the freshest target messages and supersedes its earlier tail", async t => {
++    const f = await fixture(t);
++    f.old.lastMessages = [msg("native-shared", "before-native value=100")];
++    await f.store.writeNow(f.old);
++    f.old.transient = { pluginMessages: { processed: [], original: [msg("native-shared", "after-native value=200"), msg("native-live", "岑舒刚发送 nativeOnly=765")] } };
++    f.current.transient = { pluginMessages: { processed: [], original: [msg("native-live", "wrong-caller nativeOnly=999")] } };
++    assert.match((await f.run("nativeOnly")).text, /岑舒刚发送 nativeOnly=765/);
++    assert.doesNotMatch((await f.run("nativeOnly")).text, /wrong-caller|999/);
++    assert.match((await f.run("after-native")).text, /value=200/);
++    assert.doesNotMatch((await f.run("before-native")).text, /value=100/);
++    delete f.old.transient;
++    f.old.pluginSnapshot = [msg("snapshot-live", "青枔刚发送 snapshotOnly=876")];
++    assert.match((await f.run("snapshotOnly")).text, /snapshotOnly=876/);
++});
++
++test("actual native plugin tool request retains read target without rerouting caller or permitting foreign mutation", async t => {
++    const f = await fixture(t);
++    _resetPluginStateForTest();
++    t.after(_resetPluginStateForTest);
++    f.old.lastMessages = [msg("foreign-wire", "岑舒跨会话 wireParameter=765")];
++    await f.store.writeNow(f.old); f.store.cancelAll(); _resetSessionsForTest();
++    const caller = getSession(f.current.id), logs: string[] = [];
++    const deps: PluginToolDeps = { core: createCore(), config: defaultConfig(200_000), log: (_level, text) => { logs.push(text); } };
++    const call = async (tool: string, args: Record<string, unknown>) => {
++        let code = 0, body = "";
++        const res = { writeHead(status: number) { code = status; }, end(chunk: unknown) { body = String(chunk ?? ""); } } as unknown as ServerResponse;
++        await handlePluginTool(JSON.stringify({ conversationId: caller.id, nativeCaller: true, tool, args }), res, deps);
++        assert.equal(code, 200, body);
++        return JSON.parse(body) as { ok: boolean; conversationId: string; result: string; outcome: string };
++    };
++    const before = sourceDigest(f.db);
++    const hit = await call("search_context", { conversation_id: f.old.id, query: "wireParameter" });
++    assert.equal(hit.ok, true); assert.equal(hit.conversationId, caller.id);
++    assert.match(hit.result, /cross-indexed-old[\s\S]*wireParameter=765/);
++    const opened = await call("search_context", { conversation_id: f.old.id, query: readHandle(hit.result) });
++    assert.match(opened.result, /岑舒跨会话 wireParameter=765/);
++    const mutation = await call("compress", { conversation_id: f.old.id, content: [{ startId: "m99999", endId: "m99999", summary: "invalid foreign write" }] });
++    assert.equal(mutation.conversationId, caller.id); assert.equal(mutation.outcome, "refused");
++    assert.ok(logs.some(line => line.includes(`[${caller.id}] [plugin] tool compress executed`)));
++    assert.equal(peekSession(f.old.id), undefined, "target must stay cold even through native plugin endpoint");
++    assert.equal(sourceDigest(f.db), before);
++});
++
++test("ambiguous canonical search aliases fail closed for cold and resident targets", async t => {
++    const f = await fixture(t);
++    const other = getSession("cross-indexed-other");
++    other.metadata.canonicalId = f.alias;
++    other.lastMessages = [msg("alias-other", "alias-conflict-private")];
++    await f.store.writeNow(other); f.store.cancelAll();
++    assert.match((await f.run("alias-conflict", f.alias)).text, /ambiguous|unavailable/i);
++    _resetSessionsForTest();
++    assert.match((await f.run("alias-conflict", f.alias)).text, /ambiguous|unavailable/i);
++    assert.doesNotMatch((await f.run("alias-conflict", f.alias)).text, /alias-conflict-private/);
++    getSession(other.id);
++    assert.match((await f.run("alias-conflict", f.alias)).text, /ambiguous|unavailable/i, "one resident alias must not hide a second cold alias");
++    assert.match((await f.run("alias-conflict", other.id)).text, /alias-conflict-private/);
++});
 diff --git a/tests/search-evidence-cache.test.ts b/tests/search-evidence-cache.test.ts
 new file mode 100644
 index 00000000..c7372ccd
@@ -4570,10 +5308,10 @@ index 00000000..c4e04975
 +});
 diff --git a/tests/search-index.test.ts b/tests/search-index.test.ts
 new file mode 100644
-index 00000000..51146f12
+index 00000000..535eb461
 --- /dev/null
 +++ b/tests/search-index.test.ts
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,248 @@
 +import test from "node:test";
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
@@ -4624,6 +5362,21 @@ index 00000000..51146f12
 +    const opened = await f.store.indexedSearch("one", "open:" + row.prepared.evidence + ":0", 3);
 +    assert.equal(opened?.rows.find(r => r.id === "m3")?.prepared?.offset, 0);
 +    assert.equal(opened?.rows.find(r => r.id === "m3")?.prepared?.text.length, 1600);
++});
++
++test("index completeness follows exact source target existence, while unsaved overlays remain searchable", async t => {
++    const f = fixture(t);
++    f.db.prepare("INSERT INTO sessions(session_id,created_at,updated_at) VALUES(?,?,?)").run("exists", 1, 1);
++    f.add("exists", 1, "persisted original");
++    assert.equal((await f.store.indexedSearch("exists", "original", 3))?.complete, true);
++    f.other.prepare("DELETE FROM sessions WHERE session_id=?").run("exists");
++    const removed = await f.store.indexedSearch("exists", "original", 3);
++    assert.equal(removed?.complete, false);
++    const unsaved = await f.store.indexedSearch("unsaved", "刚刚", 3, {
++        overlays: [{ id: "fresh", role: "user", contentType: "text", text: "青枔刚刚发来的消息" }],
++    });
++    assert.equal(unsaved?.complete, false);
++    assert.deepEqual(unsaved?.matchIds, ["fresh"]);
 +});
 +
 +test("incremental index observes same-length CAS edits, deletion, retirement and content restoration from other connections", async t => {
@@ -5138,6 +5891,25 @@ index ea5bac1e..f64b980e 100644
      storeEffectiveSearchPlanAware(f.session, true);
      const on = executeSearchContextTarget({ query: "token" }, f.core, f.session.id, f.session.state, { messages: planMessages(), config: f.config, session: f.session, log: () => {} }).text;
      assert.notEqual(on, off, "flagged ctx → re-ranked output");
+diff --git a/tests/tool-ring.test.ts b/tests/tool-ring.test.ts
+index 7d0c0a95..5bcc1cea 100644
+--- a/tests/tool-ring.test.ts
++++ b/tests/tool-ring.test.ts
+@@ -62,6 +62,14 @@ describe("#1685 tool-ring unit", () => {
+         assert.equal(lookupToolWitness("compress", JSON.stringify({ startId: "m1", summary: "x" })).size, 1);
+     });
+ 
++    it("foreign search targets remain distinct while the caller witness stays bound", () => {
++        const args = { query: "青枔", conversation_id: "target-a" };
++        recordToolWitness("caller", "search_context", args);
++        assert.deepEqual([...lookupToolWitness("mcp__bili__search_context", args)], ["caller"]);
++        assert.equal(lookupToolWitness("search_context", { ...args, conversation_id: "target-b" }).size, 0);
++        assert.equal(lookupToolWitness("search_context", { query: args.query }).size, 0);
++    });
++
+     it("argument key order is irrelevant (stableStringify)", () => {
+         recordToolWitness("s1", "compress", JSON.stringify({ summary: "s", startId: "m00001", endId: "m00002" }));
+         const hits = lookupToolWitness("compress", JSON.stringify({ endId: "m00002", startId: "m00001", summary: "s" }));
 diff --git a/tsup.config.ts b/tsup.config.ts
 index 0d806a16..6a54aa99 100644
 --- a/tsup.config.ts
