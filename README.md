@@ -10,7 +10,7 @@
 
 ## 引擎适配
 
-基于 billion-context v0.1.209 的本地分支。复用 `compress.externalSummary` 和 `providers`，不新增第二套调度器。插件启动时在 IPv4 loopback 建立带随机令牌的本地摘要服务；引擎私有凭据库只保存本地服务令牌。
+基于 billion-context v0.1.212 的本地分支。 保留上游 0.1.212 的时间戳、schema v10、只读存储快照与消息水位优化，同时迁移本机原文 FTS、多模型事务、90% 硬阈值和后台追加兼容。不会用上游较窄的摘要搜索覆盖原文检索。复用 `compress.externalSummary` 和 `providers`，不新增第二套调度器。插件启动时在 IPv4 loopback 建立带随机令牌的本地摘要服务；引擎私有凭据库只保存本地服务令牌。
 
 `compress`、后台预先折叠和 `/compact` 共用引擎范围与校验。候选生成期间只隔离压缩相关字段；草稿不进入持久化队列，提交按字段增量合并，保留懒加载 Map 和无关状态。整批通过才提交，版本冲突放弃。严格模式禁用紧急 CPU 摘要、摘要截短补救、近期保留区放宽；无法安全压缩时明确失败，不牺牲已保护历史。跨多轮压缩读取缓存原文；原文缺失时拒绝只对旧摘要进行审核。
 
@@ -40,7 +40,7 @@ CI 使用 `.node-version` 中的 Node `22.22.2` 和 `packageManager` 指定的 n
 
 ## 安装（Windows / PowerShell 7）
 
-本插件使用 [billion-context](https://github.com/ranxianglei/billion-context) 及其 [acp-kernel](https://github.com/ranxianglei/acp-kernel)。适配基于 v0.1.209，提交 39a0ada58f396ec6e5ee29fdbaa01c01b74f14d9；补丁与上游完整许可位于 patches/，并非上游官方发行版。
+本插件使用 [billion-context](https://github.com/ranxianglei/billion-context) 及其 [acp-kernel](https://github.com/ranxianglei/acp-kernel)。适配基于 v0.1.212，提交 daa082ead8a8ead60311e29ad4627bff0f569fc1；补丁与上游完整许可位于 patches/，并非上游官方发行版。
 
 需要支持内置 `node:sqlite` 与 FTS5 的 Node.js 22（已验证 `22.22.2`）、npm、Git、已安装的 DSH 和可调用相应模型的账户。准备脚本会实际检测 SQLite 能力。先关闭 DSH 再安装，安装完成后重新打开。克隆目录须长期保留，安装使用本地目录链接。
 

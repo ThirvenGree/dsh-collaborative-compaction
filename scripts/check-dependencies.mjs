@@ -7,12 +7,16 @@ import {execSync} from 'node:child_process';
 
 // npm ci installs the lockfile. Check the package identities too, including the engine's
 // linked workspaces, so a warm developer node_modules cannot hide a mismatched dependency.
-export function checkDependencies(directory,{sqlite=false}={}){
+export function checkDependencies(directory,{sqlite=false,engineVersion}={}){
  const root=path.resolve(directory),read=file=>JSON.parse(fs.readFileSync(path.join(root,file),'utf8'));
  const manifest=read('package.json'),lock=read('package-lock.json'),base=lock.packages?.[''];
  assert.equal(lock.lockfileVersion,3,'Expected a v3 npm lockfile');
  assert.equal(base?.name,manifest.name,'Manifest and lockfile package names differ');
  assert.equal(base?.version,manifest.version,'Manifest and lockfile package versions differ');
+ if(engineVersion!==undefined){
+  assert.equal(manifest.name,'billion-context','Expected the patched engine checkout');
+  assert.equal(manifest.version,engineVersion,'Engine version differs from the tested upstream pin');
+ }
  const checked=[];
  for(const section of ['dependencies','devDependencies','optionalDependencies']){
   assert.deepEqual(base[section]||{},manifest[section]||{},section+' declarations differ from the lockfile');
@@ -55,5 +59,6 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
   assert.match(manager,/^npm@\d+\.\d+\.\d+$/,'Declare the tested npm version');
   assert.equal('npm@'+npm,manager,'Use the same npm version as packageManager');
  }
- console.log(JSON.stringify({...checkDependencies(process.argv[2]||process.cwd(),{sqlite:process.argv.includes('--sqlite')}),npm},null,2));
+ const engineVersion=process.argv.find(arg=>arg.startsWith('--engine-version='))?.slice('--engine-version='.length);
+ console.log(JSON.stringify({...checkDependencies(process.argv[2]||process.cwd(),{sqlite:process.argv.includes('--sqlite'),engineVersion}),npm},null,2));
 }

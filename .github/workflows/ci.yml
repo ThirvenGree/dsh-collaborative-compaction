@@ -31,17 +31,19 @@ jobs:
       - name: Verify pinned upstream and patch
         run: |
           git clone --no-checkout https://github.com/ranxianglei/billion-context.git .engine
-          git -C .engine checkout --detach 39a0ada58f396ec6e5ee29fdbaa01c01b74f14d9
-          git -C .engine apply --check ../patches/billion-context-v0.1.209.patch
-          git -C .engine apply ../patches/billion-context-v0.1.209.patch
+          git -C .engine checkout --detach daa082ead8a8ead60311e29ad4627bff0f569fc1
+          git -C .engine apply --check ../patches/billion-context-v0.1.212.patch
+          git -C .engine apply ../patches/billion-context-v0.1.212.patch
       - run: npm ci --ignore-scripts
         working-directory: .engine
-      - run: node scripts/check-dependencies.mjs .engine --sqlite --pinned-toolchain
+      - run: node scripts/check-dependencies.mjs .engine --sqlite --pinned-toolchain --engine-version=0.1.212
+      - run: npm run typecheck
+        working-directory: .engine
       - run: npm run build
         working-directory: .engine
       - run: node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts tests/search-original-evidence.test.ts tests/search-evidence-cache.test.ts tests/search-context-cross-session.test.ts tests/search-plan-aware.test.ts tests/search-index.test.ts tests/search-index-integration.test.ts tests/search-index-dist.test.ts tests/search-index-resume.test.ts tests/search-index-progress.test.ts tests/check-dist-external.test.ts tests/search-fts-acceptance.test.ts tests/ccr-plugin.test.ts
         working-directory: .engine
-      - run: node --import tsx --test --test-name-pattern="collaborative compact" tests/dsh-native.test.ts
+      - run: node --import tsx --test tests/dsh-native.test.ts
         working-directory: .engine
       - run: npm ci --ignore-scripts
       - run: node scripts/check-dependencies.mjs . --pinned-toolchain
