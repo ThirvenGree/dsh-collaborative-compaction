@@ -61,8 +61,8 @@ const CSS=`
 .dcc-more ul{margin:10px 0 0;padding-left:1.2em;color:var(--dcc-muted);max-width:46em}
 .dcc-more li{margin:3px 0}
 
-.dcc-tabs{display:flex;gap:6px;margin-top:30px;border-bottom:1px solid var(--dcc-line)}
-.dcc-tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:8px 12px;cursor:pointer;color:var(--dcc-muted)}
+.dcc-tabs{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:30px;border-bottom:1px solid var(--dcc-line)}
+.dcc-tab{display:inline-flex;align-items:center;flex:0 0 auto;white-space:nowrap;appearance:none;background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:8px 12px;cursor:pointer;color:var(--dcc-muted)}
 .dcc-tab[aria-selected=true]{color:inherit;border-bottom-color:var(--dcc-accent);font-weight:600}
 .dcc-count{margin-left:6px;font-size:.75rem;padding:0 6px;border-radius:999px;background:var(--dcc-soft)}
 
@@ -718,7 +718,7 @@ function Panel(){
    h(Flow,{d:draft,set,saved:base?String(base.enabled)===String(draft.enabled):true}),
    h(PolicyScope,{scope:state?.replay?.scope}),
    h('div',{className:'dcc-tabs',role:'tablist','aria-label':'协作压缩设置'},TABS.map(([id,title],i)=>{
-    const badge=id==='settings'?tabBadge(SETTINGS_KEYS,changes,errors):id==='learning'?tabBadge(LEARNING_KEYS,changes,errors)||h('span',{className:'dcc-count dcc-tone-'+learning.tone},learning.short):failed?h('span',{className:'dcc-count dcc-tone-bad'},`${failed} 次失败`):null;
+    const badge=id==='settings'?tabBadge(SETTINGS_KEYS,changes,errors):id==='learning'?tabBadge(LEARNING_KEYS,changes,errors)||h('span',{className:'dcc-count dcc-tone-'+learning.tone},learning.short):id==='runs'&&failed?h('span',{className:'dcc-count dcc-tone-bad'},`${failed} 次失败`):null;
     return h('button',{key:id,type:'button',role:'tab',id:'dcc-tab-'+id,'aria-selected':tab===id?'true':'false','aria-controls':'dcc-panel-'+id,tabIndex:tab===id?0:-1,className:'dcc-tab',
      onClick:()=>setTab(id),onKeyDown:e=>{
       const step=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;if(!step)return;e.preventDefault();
