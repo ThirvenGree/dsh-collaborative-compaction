@@ -173,10 +173,10 @@ index baa64196..3d8a4404 100644
 +- `src/collaborative-background.ts`: staged soft-pressure review; safe-boundary replay on the current session.
 diff --git a/reference/censhu-0212-migration.md b/reference/censhu-0212-migration.md
 new file mode 100644
-index 00000000..9c09ec5f
+index 00000000..a797e95b
 --- /dev/null
 +++ b/reference/censhu-0212-migration.md
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,15 @@
 +# Local DSH migration to v0.1.212
 +
 +This checkout combines upstream tag v0.1.212 (`daa082ead8a8ead60311e29ad4627bff0f569fc1`) with the existing local collaborative compaction and raw-history search extensions. It is a local installation, not an upstream release.
@@ -184,6 +184,8 @@ index 00000000..9c09ec5f
 +Preserved behavior includes worker-backed SQLite FTS across original and current messages, resumable batched indexing, evidence references, A/B generation with independent review and verification, planner caching, hard-pressure override, failure receipts, and append-safe background transactions. Main-model and provider configuration remain user-owned.
 +
 +Upstream storage schema/time metadata, bounded reads, snapshot isolation, stable message-ID token memoization, no-op fold semantics, and restart health checks are retained. The local index consumes the independent message timestamp column; an ancestor search also includes folded-away summaries. A successful no-op does not pay for another summary or count as a new fold. Host metadata and lazy content containers retain their identities.
++
++Installed-runtime acceptance exposed a stale effective-config stamp path that re-read the summary chain without its named provider recipes after the local adapter port changed. It now resolves the agent registry plus live file recipes with the same file-first precedence as model requests; 17 config-epoch/provider regressions passed, including endpoint refresh and disabled-chain behavior.
 +
 +Kernel-change rationale: preserve the already installed original-history search tool descriptions. No kernel algorithm or tool schema was changed for this migration. The vendored kernel is identified as `0.0.178-censhu.1`, with exact lockfile matching. Prompt fixtures and wire golden descriptions were regenerated for that explicit description change only; behavior constants and protocol rules remain unchanged.
 +
@@ -1673,10 +1675,33 @@ index 8f6b8738..a587335b 100644
              // less than its fixed cost — same economics as a zero-progress pass,
              // so arm the same cooldown instead of paying per-request for
 diff --git a/src/session.ts b/src/session.ts
-index dc5f83ac..3a621f7a 100644
+index dc5f83ac..c092ee95 100644
 --- a/src/session.ts
 +++ b/src/session.ts
-@@ -1602,9 +1602,11 @@ export function snapshotMessages(session: Session, messages: CoreMessage[]): voi
+@@ -4,7 +4,8 @@ import { log as loggerLog } from "./logger.js";
+ import { getStore, effectiveFileStorageMode } from "./persist.js";
+ import { VERSION } from "./version.js";
+ import { maxSessions as knobMaxSessions, sessionWarmMax, sessionWarmMaxBytes, sessionResidentMaxBytes } from "./knobs.js";
+-import { configFileEpoch, loadConfigFile } from "./config.js";
++import { configFileEpoch, loadConfigFile, loadNamedProviders } from "./config.js";
++import { agentProviderRecipes } from "./agent-providers.js";
+ import { applyCompressSettings, hasCompressSettings, resolveContextLimitValue } from "./compress-settings.js";
+ import { durableMessageToolPaths, withDurableProtection } from "./durable-message-guards.js";
+ import type { AnonymousProvenance } from "./anon-provenance.js";
+@@ -792,7 +793,11 @@ function liveFileOverlayConfig(base: Config): Config {
+     const compress = loadConfigFile().compress;
+     if (!compress || !hasCompressSettings(compress)) return base;
+     const limit = resolveContextLimitValue(compress.modelContextLimit, base.modelContextLimit);
+-    return applyCompressSettings(base, limit, compress, {});
++    // The stale-stamp path runs without a new model request (status/search/
++    // manual tools). Resolve the same recipe layers as the request path:
++    // live file recipes override the in-memory agent registry. Dropping these
++    // makes an enabled named summary chain fail after its local port changes.
++    return applyCompressSettings(base, limit, compress, { ...agentProviderRecipes(), ...loadNamedProviders() });
+ }
+ 
+ export function effectiveConfig(session: Session | undefined, fallback: Config): Config {
+@@ -1602,9 +1607,11 @@ export function snapshotMessages(session: Session, messages: CoreMessage[]): voi
  
  /** Mark a session's state as changed so it is persisted on the next debounce.
   *  Call this after any mutation (processTurn, compress, decompress, orphan GC). */
@@ -3166,6 +3191,85 @@ index 00000000..7041bbb6
 +  assert.equal(result.failure,undefined);
 +  assert.equal(summaries,0);
 + },()=>{summaries++;return true;},input=>({decision:"now",ranges:input.candidates.slice(0,1),reason:"stale range"}));
++});
+diff --git a/tests/config-epoch.test.ts b/tests/config-epoch.test.ts
+index 3398fe1f..b75915df 100644
+--- a/tests/config-epoch.test.ts
++++ b/tests/config-epoch.test.ts
+@@ -6,6 +6,8 @@ import test from "node:test";
+ import { defaultConfig, createInitialState, type Config } from "acp-kernel";
+ import { effectiveConfig, storeEffectiveConfig, type Session } from "../src/session.js";
+ import { externalSummaryEnabled } from "../src/external-summary-surface.js";
++import { recordAgentProviders } from "../src/agent-providers.js";
++import type { ResolvedKernelConfig } from "../src/compress-settings.js";
+ 
+ // #3430: the effectiveConfig stamp is only valid while the config SOURCE it was
+ // resolved from is still the live one. These tests pin the stale-stamp guard:
+@@ -132,3 +134,65 @@ test("config epoch: stamps without an epoch keep the legacy behavior (stamp wins
+         rmSync(dir, { recursive: true, force: true });
+     }
+ });
++
++test("config epoch: collaborative chain resolves its current file recipe after the adapter port changes", () => {
++    const dir = mkdtempSync(path.join(tmpdir(), "bili-epoch-collaborative-"));
++    const file = pinnedConfigFile(dir);
++    const previous = process.env.BILI_CONFIG_FILE;
++    const previousProviders = process.env.ACP_PROVIDERS;
++    delete process.env.ACP_PROVIDERS;
++    process.env.BILI_CONFIG_FILE = file;
++    const config = (port: number, enabled = true) => ({
++        providers: { "dsh-collaborative": { baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai", credentialRef: "local-summary",
++            models: { "dsh-collaborative-v1": { contextWindow: 1_000_000, outputTokens: 32_768 } } } },
++        compress: { externalSummary: { enabled, targets: ["dsh-collaborative/dsh-collaborative-v1"], autoFold: true, modelPlanning: true } },
++    });
++    try {
++        writeFileSync(file, JSON.stringify(config(18001)));
++        const session = makeSession();
++        storeEffectiveConfig(session, defaultConfig(200_000));
++        // A registry recipe of the same name must not shadow the live file.
++        recordAgentProviders("epoch-test", { "dsh-collaborative": { baseUrl: "http://127.0.0.1:18003/v1", api: "openai", apiKey: "test-only-key",
++            models: { "dsh-collaborative-v1": { contextWindow: 128_000 } } } });
++        writeFileSync(file, JSON.stringify(config(18002)));
++        const read = effectiveConfig(session, defaultConfig(200_000)) as ResolvedKernelConfig;
++        assert.equal(read.externalSummary?.enabled, true);
++        assert.equal(read.externalSummary?.targets[0].url, "http://127.0.0.1:18002/v1/chat/completions");
++        assert.equal(read.externalSummary?.targets[0].credentialRef, "secret:local-summary");
++        assert.equal(read.externalSummary?.targets[0].apiKey, undefined);
++        assert.equal(read.externalSummary?.modelPlanning, true);
++        writeFileSync(file, JSON.stringify(config(18002, false)));
++        assert.equal(externalSummaryEnabled(effectiveConfig(session, defaultConfig(200_000))), false);
++    } finally {
++        recordAgentProviders("epoch-test", {});
++        if (previous === undefined) delete process.env.BILI_CONFIG_FILE; else process.env.BILI_CONFIG_FILE = previous;
++        if (previousProviders === undefined) delete process.env.ACP_PROVIDERS; else process.env.ACP_PROVIDERS = previousProviders;
++        rmSync(dir, { recursive: true, force: true });
++    }
++});
++
++test("config epoch: stale file overlay can resolve a registry-only summary provider", () => {
++    const dir = mkdtempSync(path.join(tmpdir(), "bili-epoch-registry-"));
++    const file = pinnedConfigFile(dir);
++    const previous = process.env.BILI_CONFIG_FILE;
++    const previousProviders = process.env.ACP_PROVIDERS;
++    delete process.env.ACP_PROVIDERS;
++    process.env.BILI_CONFIG_FILE = file;
++    try {
++        writeFileSync(file, JSON.stringify({ compress: {} }));
++        const session = makeSession();
++        storeEffectiveConfig(session, defaultConfig(200_000));
++        recordAgentProviders("epoch-test", { "registered-summary": { baseUrl: "https://summary.example/v1", api: "openai", apiKey: "test-only-key",
++            models: { "summary-model": { contextWindow: 128_000 } } } });
++        writeFileSync(file, JSON.stringify({ compress: { externalSummary: { enabled: true, targets: ["registered-summary/summary-model"] } } }));
++        const read = effectiveConfig(session, defaultConfig(200_000)) as ResolvedKernelConfig;
++        assert.equal(read.externalSummary?.enabled, true);
++        assert.equal(read.externalSummary?.targets[0].url, "https://summary.example/v1/chat/completions");
++        assert.equal(read.externalSummary?.targets[0].apiKey, "test-only-key");
++    } finally {
++        recordAgentProviders("epoch-test", {});
++        if (previous === undefined) delete process.env.BILI_CONFIG_FILE; else process.env.BILI_CONFIG_FILE = previous;
++        if (previousProviders === undefined) delete process.env.ACP_PROVIDERS; else process.env.ACP_PROVIDERS = previousProviders;
++        rmSync(dir, { recursive: true, force: true });
++    }
 +});
 diff --git a/tests/dsh-native.test.ts b/tests/dsh-native.test.ts
 index d1c76b43..6095a772 100644
