@@ -94,9 +94,11 @@ const CSS=`
 .dcc-bar{position:sticky;bottom:16px;z-index:2;margin-top:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 12px 10px 18px;border-radius:12px;background:var(--dcc-ink);color:#f3f6fa;box-shadow:0 8px 24px rgba(10,20,35,.28)}
 .dcc-bar-text{flex:1;min-width:12em;font-size:.875rem}
 .dcc-bar-text strong{font-weight:600}
-.dcc-btn{appearance:none;border-radius:8px;padding:7px 14px;cursor:pointer;border:1px solid transparent;font-weight:550}
+.dcc-btn{appearance:none;border-radius:8px;padding:7px 14px;cursor:pointer;border:1px solid var(--dcc-line-strong);background:transparent;font-weight:550}
+.dcc-btn:not(:disabled):hover{background:var(--dcc-soft)}
 .dcc-btn:disabled{cursor:not-allowed;opacity:.55}
-.dcc-btn-primary{background:var(--dcc-accent);color:#fff!important}
+.dcc-btn-primary{background:var(--dcc-accent);border-color:transparent;color:#fff!important}
+.dcc-btn-primary:not(:disabled):hover{background:color-mix(in srgb,var(--dcc-accent) 88%,#000)}
 .dcc-bar .dcc-btn-primary{background:#fff;color:var(--dcc-ink)!important}
 .dcc-btn-ghost{background:transparent;border-color:currentColor}
 .dcc-bar .dcc-btn-ghost{border-color:rgba(255,255,255,.4)}
@@ -141,6 +143,55 @@ const CSS=`
 .dcc-raw pre{font-family:var(--dcc-mono);font-size:.75rem;line-height:1.5;max-height:320px;overflow:auto;background:var(--dcc-soft);padding:12px;border-radius:8px;margin:8px 0 0;white-space:pre-wrap;word-break:break-all}
 .dcc-loading{color:var(--dcc-muted);padding:20px 0}
 
+.dcc-tab .dcc-count{font-weight:500}
+.dcc-panel[hidden]{display:none}
+.dcc-learning{padding-top:20px}
+.dcc-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.dcc-card{min-width:0;border:1px solid var(--dcc-line);border-radius:14px;padding:16px 18px 18px}
+.dcc-card.is-attention{border-color:color-mix(in srgb,var(--dcc-warn) 55%,transparent)}
+.dcc-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.dcc-card-head h3{font-size:1rem;font-weight:620;margin:0}
+.dcc-card-kicker{margin:2px 0 0;font-size:.8125rem;color:var(--dcc-muted)}
+.dcc-card p{margin:8px 0 0}
+.dcc-toggle-row{display:flex;align-items:flex-start;gap:12px;margin:14px 0 4px;padding:12px 0;border-top:1px solid var(--dcc-line);border-bottom:1px solid var(--dcc-line)}
+.dcc-toggle-row .dcc-switch{margin-top:2px}
+.dcc-toggle-row strong{display:block;font-weight:600}
+.dcc-toggle-row span{font-size:.8125rem;color:var(--dcc-muted)}
+.dcc-phase{margin-top:12px;font-weight:550}
+.dcc-meters{display:grid;gap:12px;margin-top:14px}
+.dcc-meter-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:.8125rem}
+.dcc-meter-top span:first-child{color:var(--dcc-muted)}
+.dcc-meter-top b{font-weight:600}
+.dcc-meter-bar{height:6px;margin-top:5px;border-radius:999px;background:var(--dcc-line);overflow:hidden}
+.dcc-meter-bar>span{display:block;height:100%;border-radius:inherit;background:var(--dcc-accent)}
+.dcc-meter.is-full .dcc-meter-bar>span{background:var(--dcc-warn)}
+.dcc-meter-note{font-size:.75rem;color:var(--dcc-muted);margin-top:3px}
+.dcc-version{display:flex;align-items:baseline;gap:4px 12px;flex-wrap:wrap;margin-top:14px}
+.dcc-version b{font-size:1.125rem;line-height:1.3;font-weight:650}
+.dcc-version span{font-size:.8125rem;color:var(--dcc-muted)}
+.dcc-tags{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0;padding:0;list-style:none}
+.dcc-tag{font-size:.75rem;line-height:1.6;border:1px solid var(--dcc-line-strong);border-radius:6px;padding:0 8px}
+.dcc-clauses{margin:10px 0 0;padding:0;list-style:none;display:grid;gap:8px}
+.dcc-clauses li{border:1px solid var(--dcc-line);border-radius:10px;padding:9px 12px;font-size:.8125rem}
+.dcc-clauses li strong{display:block;font-size:.875rem;font-weight:600}
+.dcc-clauses small{display:block;margin-top:4px;color:var(--dcc-muted);font-family:var(--dcc-mono);font-size:.6875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dcc-callout{margin-top:12px;padding:10px 12px;border-left:3px solid var(--dcc-line-strong);border-radius:0 8px 8px 0;background:var(--dcc-soft);font-size:.8125rem}
+.dcc-callout.is-warn{border-left-color:var(--dcc-warn)}
+.dcc-callout p{margin:0}
+.dcc-callout p+p{margin-top:6px}
+.dcc-callout code{font-family:var(--dcc-mono);font-size:.75rem;word-break:break-all}
+.dcc-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px}
+.dcc-actions .dcc-hint{margin:0;flex:1;min-width:14em}
+.dcc-card .dcc-more{margin-top:12px}
+.dcc-card .dcc-more>summary{font-size:.8125rem}
+.dcc-card .dcc-more p{margin:8px 0 0;color:var(--dcc-muted);font-size:.8125rem}
+.dcc-section{margin-top:16px}
+.dcc-lanes{display:flex;gap:4px;flex-wrap:wrap}
+.dcc-kv{display:grid;grid-template-columns:9em minmax(0,1fr);gap:4px 16px;font-size:.875rem;margin:0}
+.dcc-kv dt{color:var(--dcc-muted)}
+.dcc-kv dd{margin:0}
+.dcc-kv+.dcc-more{margin-top:10px}
+
 @container (max-width:760px){
  .dcc-track{grid-template-columns:minmax(0,1fr)}
  .dcc-link{height:18px;width:1px;margin:3px auto}
@@ -148,6 +199,10 @@ const CSS=`
  .dcc-pair{grid-template-columns:repeat(2,minmax(0,1fr))}
  .dcc-node{min-height:0}
  .dcc-grid{grid-template-columns:minmax(0,1fr)}
+ .dcc-cols{grid-template-columns:minmax(0,1fr)}
+ .dcc-kv{grid-template-columns:minmax(0,1fr)}
+ .dcc-kv dd{margin-bottom:6px}
+ .dcc-tab{padding:8px 8px}
  .dcc-run>summary{grid-template-columns:auto auto minmax(0,1fr) auto;row-gap:6px}
  .dcc-run>summary .dcc-detail{grid-column:1/-1}
 }
@@ -168,11 +223,11 @@ const GROUPS=[
   ['verificationProvider','核验服务'],['verificationModel','核验模型']]},
  {id:'budget',title:'时间与篇幅',sub:'超时或超出篇幅时整批放弃，会话原文保持不变。',fields:[
   ['timeoutMs','单次压缩流水线超时'],['plannerTimeoutMs','规划超时'],
-  ['replayTimeoutMs','校准单次运行超时','默认 30 分钟，可设 10–60 分钟；已完成步骤会保留，恢复后接着验证'],
   ['maxSummaryChars','每段摘要字数上限'],['verificationMaxFacts','核验引用的关键事实'],
-  ['preserveRecentTokens','不压缩的最近历史'],['autoFoldTargetTokens','自动折叠目标','范围 8192–10000000；启用模型规划时也须有效'],
+  ['preserveRecentTokens','不压缩的最近历史'],['autoFoldTargetTokens','自动折叠目标','关闭模型规划时决定何时折叠；开启规划时同样写入引擎，须在有效范围内'],
   ['retries','网络失败重试']]},
- {id:'calibration',title:'后台校准预算',sub:'初始化和完整验证分批进行。达到预算会暂停并保存进度；每日额度按 UTC 日期重置。保存的预算从下一批生效，不清空已验证的策略。',fields:[
+ {id:'calibration',tab:'learning',title:'后台校准预算',sub:'初始化和完整验证分批进行。达到预算会暂停并保存进度；每日额度按 UTC 日期重置。保存的预算从下一批生效，不清空已验证的策略。',fields:[
+  ['replayTimeoutMs','校准单次运行超时','默认 30 分钟，可设 10–60 分钟；已完成步骤会保留，恢复后接着验证'],
   ['replaySliceCalls','每批模型请求上限','默认 12 次；A、Claude、审核、核验及网络重试分别计数'],
   ['replaySliceMs','每批启动请求的时间窗口','默认 2 分钟；时间到后不再发起新请求，已发起的请求仍受各自超时保护'],
   ['replayResumeMinutes','分批恢复间隔','默认 15 分钟；每日预算不足时等待次日额度'],
@@ -295,15 +350,27 @@ function Field({k,label,hint,value,base,onChange}){
   h('div',{className:'dcc-hint',id:id+'-hint'},help&&hint&&!err&&human(k,value)?`${hint}，${human(k,value)}`:help));
 }
 
-function Settings({draft,base,set}){
- return h('div',null,GROUPS.map(g=>{
-  const grid=h('div',{className:'dcc-grid'},g.fields.map(([k,label,hint])=>h(Field,{key:k,k,label,hint,value:draft[k],base,onChange:set})));
-  if(g.collapsed){
-   const open=g.fields.some(([k])=>check(k,draft[k])||(base&&String(base[k])!==String(draft[k])));
-   return h('details',{key:g.id,className:'dcc-group',open:open||undefined},h('summary',null,g.title),h('p',{className:'dcc-sub'},g.sub),grid);
-  }
-  return h('section',{key:g.id,className:'dcc-group','aria-labelledby':'dcc-g-'+g.id},h('h3',{id:'dcc-g-'+g.id},g.title),h('p',{className:'dcc-sub'},g.sub),grid);
- }));
+function Group({g,draft,base,set}){
+ const grid=h('div',{className:'dcc-grid'},g.fields.map(([k,label,hint])=>h(Field,{key:k,k,label,hint,value:draft[k],base,onChange:set})));
+ if(g.collapsed){
+  const open=g.fields.some(([k])=>check(k,draft[k])||(base&&String(base[k])!==String(draft[k])));
+  return h('details',{className:'dcc-group',open:open||undefined},h('summary',null,g.title),h('p',{className:'dcc-sub'},g.sub),grid);
+ }
+ return h('section',{className:'dcc-group','aria-labelledby':'dcc-g-'+g.id},h('h3',{id:'dcc-g-'+g.id},g.title),h('p',{className:'dcc-sub'},g.sub),grid);
+}
+function Retrieval({retrieval}){
+ const tool=retrieval?.enabled===true?'已开启。Anthropic / OpenAI Chat Completions 插件通道从 '+retrieval.minToolTokens+' tokens 起可保留原件，以 '+retrieval.tool+' 取回；Responses 浏览器任务通过 browser_progress 查看证据。':retrieval?.enabled===false?'未开启。':'暂未读到配置。';
+ return h('section',{className:'dcc-group','aria-labelledby':'dcc-g-retrieval'},h('h3',{id:'dcc-g-retrieval'},'检索与取回'),
+  h('p',{className:'dcc-sub'},'由压缩引擎提供，这里只显示状态，不需要设置。'),
+  h('dl',{className:'dcc-kv'},
+   h('dt',null,'历史原文检索'),h('dd',null,'search_context · SQLite 全文索引，在工作线程运行'),
+   h('dt',null,'大工具结果取回'),h('dd',null,tool)),
+  h('details',{className:'dcc-more'},h('summary',null,'检索如何工作'),
+   h('p',null,'search_context 可定位压缩前的原始记录、摘要和附件说明。两字人名使用短词索引，刚发送但尚未保存的消息也参与本轮检索。命中后可继续读取原文。'),
+   h('p',null,'首次查询会建立可重建的本地索引，之后按记录变化更新；查询在工作线程运行。索引故障会明确提示搜索未完成，不代表原文不存在。搜索本身不调用外部模型。')));
+}
+function Settings({draft,base,set,retrieval}){
+ return h('div',null,GROUPS.filter(g=>!g.tab).map(g=>h(Group,{key:g.id,g,draft,base,set})),h(Retrieval,{retrieval}));
 }
 
 function RunBody({r}){
@@ -379,41 +446,94 @@ function PolicyScope({scope}){
 }
 const calibrationLabels={running:'正在分批校准',paused:'已保存进度，等待继续',failed:'暂未完成，等待恢复',completed:'本轮已完成',invalidated:'依据已变化，准备重新验证'};
 const calibrationPhases={bootstrap:'初始化基线',diagnostic:'三路诊断','discovery-old-1':'复现现行策略的问题','hidden-old-1':'验证未见题的现行基线','candidate-1':'对照候选与现行策略','old-repeat-2':'第二次独立生成现行摘要','candidate-repeat-2':'第二次独立生成候选摘要','proposal-review':'生成并独立审核新条款'};
-function ReplayProgress({replay,calibration,enabled,config}){
- const schedule=replay?.policy?.automatic||replay?.schedule,progress=replay?.running?replay.progress:null;
- const completed=[replay?.policy?.last?.telemetry,replay?.report?.telemetry].filter(Boolean).sort((a,b)=>(b.startedAt||0)-(a.startedAt||0));
- const last=progress||calibration?.telemetry||completed[0],baseline=replay?.policy?.baseline?.current===false?null:replay?.policy?.baseline;
- const current=calibration||replay?.calibration,usage=current?.usage;
- const active=enabled&&config?.enabled;
+const calibrationShort={running:'进行中',paused:'等待继续',failed:'未完成',completed:'已完成',invalidated:'需重新验证'};
+function calibrationView(replay,calibration,config){
+ const progress=replay?.running?replay.progress:null,current=calibration||replay?.calibration;
+ const active=!!(config?.replayFeedbackEnabled&&config?.enabled);
  const phasePath=progress?.phase||current?.phase;
  const phase=typeof phasePath==='string'&&Object.entries(calibrationPhases).find(([key])=>phasePath.split('/').includes(key))?.[1];
- return h('div',{className:'dcc-more',role:'status'},
-  h('div',{className:'dcc-head'},h('strong',null,current?.kind==='validation'?'候选策略验证':'自动基线初始化'),
-   h('span',{className:'dcc-pill dcc-tone-'+(!active?'neutral':current?.status==='completed'?'ok':current?.status==='failed'?'bad':'warn')},!active?'后台校准已关闭':calibrationLabels[current?.status]||'等待后台小批初始化')),
-  schedule?h('p',null,schedule.reason+(active&&schedule.nextAt?' 下次考虑：'+clock(schedule.nextAt):'')):null,
-  current?h(R.Fragment,null,
-   h('p',null,'当前阶段：'+(phase||phasePath||(current.kind==='bootstrap'?'初始化基线':'对照验证'))+(current.reason?' · '+current.reason:'')),
-   h('div',{className:'dcc-meta'},h('span',null,'已保存步骤 ',h('b',null,current.completedTasks??0)),
-    current.coverage?h('span',null,'已覆盖问题 ',h('b',null,(current.coverage.completed??0)+' / '+(current.coverage.total??'—'))):null,
-    current.updatedAt?h('span',null,'更新于 '+clock(current.updatedAt)):null),
-   current.nextAt&&active?h('p',{className:'dcc-hint'},'最早恢复：'+clock(current.nextAt)):null):null,
+ const tone=!active?'neutral':current?.status==='completed'?'ok':current?.status==='failed'?'bad':'warn';
+ const label=!active?'后台校准已关闭':calibrationLabels[current?.status]||'等待后台小批初始化';
+ return {progress,current,active,phasePath,phase,tone,label,short:!active?'已关闭':calibrationShort[current?.status]||'待初始化'};
+}
+function Meter({label,value,max,text,note}){
+ const ratio=Number(max)>0?Math.min(1,Math.max(0,Number(value)/Number(max))):0;
+ return h('div',{className:'dcc-meter'+(ratio>=1?' is-full':'')},
+  h('div',{className:'dcc-meter-top'},h('span',null,label),h('b',null,text)),
+  h('div',{className:'dcc-meter-bar',role:'progressbar','aria-label':label,'aria-valuemin':0,'aria-valuemax':Number(max)||0,'aria-valuenow':Number(value)||0},h('span',{style:{width:Math.round(ratio*100)+'%'}})),
+  note?h('div',{className:'dcc-meter-note'},note):null);
+}
+function CalibrationCard({replay,calibration,config,draft,set,onAction}){
+ const view=calibrationView(replay,calibration,config),{progress,current,active,phasePath,phase}=view;
+ const schedule=replay?.policy?.automatic||replay?.schedule,usage=current?.usage;
+ const completed=[replay?.policy?.last?.telemetry,replay?.report?.telemetry].filter(Boolean).sort((a,b)=>(b.startedAt||0)-(a.startedAt||0));
+ const last=progress||calibration?.telemetry||completed[0],baseline=replay?.policy?.baseline?.current===false?null:replay?.policy?.baseline;
+ const enabled=config?.replayFeedbackEnabled;
+ return h('section',{className:'dcc-card'+(active&&['paused','failed'].includes(current?.status)?' is-attention':''),'aria-labelledby':'dcc-cal-title'},
+  h('div',{className:'dcc-card-head'},h('div',null,h('h3',{id:'dcc-cal-title'},'自动校准'),h('p',{className:'dcc-card-kicker'},current?.kind==='validation'?'候选策略验证':'自动基线初始化')),
+   h('span',{className:'dcc-pill dcc-tone-'+view.tone,role:'status'},view.label)),
+  h('div',{className:'dcc-toggle-row'},h(Switch,{checked:!!draft.replayFeedbackEnabled,label:'回放验证后自动应用压缩策略',onChange:v=>set('replayFeedbackEnabled',v)}),
+   h('div',null,h('strong',null,'回放验证后自动应用'),h('span',null,'通过独立审核、重复对照和无退步检查后，才从下一次压缩起使用新条款。'))),
+  current?h('p',{className:'dcc-phase'},'当前阶段：'+(phase||phasePath||(current.kind==='bootstrap'?'初始化基线':'对照验证'))+(current.reason?' · '+current.reason:'')):null,
+  schedule?h('p',{className:'dcc-hint'},schedule.reason+(active&&schedule.nextAt?' 下次考虑：'+clock(schedule.nextAt):'')):null,
+  current&&active&&current.nextAt?h('p',{className:'dcc-hint'},'最早恢复：'+clock(current.nextAt)):null,
+  h('div',{className:'dcc-meters'},
+   current?.coverage?h(Meter,{label:'已覆盖问题',value:current.coverage.completed??0,max:current.coverage.total,text:(current.coverage.completed??0)+' / '+(current.coverage.total??'—'),
+    note:'已保存步骤 '+(current.completedTasks??0)+(current.updatedAt?' · 更新于 '+clock(current.updatedAt):'')}):
+    current?h('div',{className:'dcc-meta'},h('span',null,'已保存步骤 ',h('b',null,current.completedTasks??0)),current.updatedAt?h('span',null,'更新于 '+clock(current.updatedAt)):null):null,
+   usage?h(Meter,{label:'今日模型请求 · UTC 日 '+usage.day,value:usage.calls??0,max:config?.replayDailyCalls??120,text:fmt(usage.calls??0)+' / '+fmt(config?.replayDailyCalls??120)}):null,
+   usage?h(Meter,{label:'今日已记账 token',value:usage.tokens??0,max:config?.replayDailyTokens??1000000,text:fmt(usage.tokens??0)+' / '+fmt(config?.replayDailyTokens??1000000),
+    note:[usage.estimatedTokens?'其中保守估算 '+fmt(usage.estimatedTokens):null,usage.reservedTokens?'在途预留 '+fmt(usage.reservedTokens):null].filter(Boolean).join(' · ')||null}):null),
   baseline?h('p',null,'当前范围的基线记录：'+clock(baseline.at)+(baseline.coverage?' · 已覆盖 '+(baseline.coverage.completed??0)+' / '+(baseline.coverage.total??'—')+' 题':'')+'。建立基线只表示完成诊断，不表示新的压缩策略已获准。'):
    h('p',{className:'dcc-hint'},'尚无当前范围的完整基线。后台先用现行压缩流水线生成摘要，再对照原文、摘要和回查结果；小批初始化本身不会改写正式策略。'),
   Array.isArray(baseline?.failures)&&baseline.failures.length?h('p',null,'基线发现的待复核问题：'+baseline.failures.map(item=>typeof item==='string'?(replayLabels[item]||item):(replayLabels[item.id]||item.id||item.reason||'待复核')).join('、')):null,
   !enabled?h('p',{className:'dcc-hint'},'此开关关闭时，手动按钮只做三路诊断，不修改策略，也不启用后台校准。'):null,
-  usage?h('div',{className:'dcc-meta'},
-   h('span',null,'UTC 日 '+usage.day),
-   h('span',null,'模型请求 ',h('b',null,fmt(usage.calls??0)+' / '+fmt(config?.replayDailyCalls??120))),
-   h('span',null,'已记账 token ',h('b',null,fmt(usage.tokens??0)+' / '+fmt(config?.replayDailyTokens??1000000))),
-   usage.estimatedTokens?h('span',null,'其中保守估算 ',h('b',null,fmt(usage.estimatedTokens))):null,
-   usage.reservedTokens?h('span',null,'在途预留 ',h('b',null,fmt(usage.reservedTokens))):null):null,
-  last?h('div',{className:'dcc-meta'},
-   h('span',null,progress?'本次运行已用时 ':'最近运行耗时 ',h('b',null,duration(progress?Date.now()-last.startedAt:last.elapsedMs))),
-   h('span',null,'本次运行时限 ',h('b',null,duration(last.timeoutMs))),
-   h('span',null,'DSH 阅读/提案调用 ',h('b',null,last.readerCalls??0)),
-   h('span',null,'完整压缩流水线 ',h('b',null,last.pipelineCalls??0)),
-   h('span',null,'独立条款审核 ',h('b',null,last.proposalReviews??0))):null,
-  h('p',{className:'dcc-hint'},'请求预算统计每次实际模型请求，完整流水线会包含多次请求。token 按服务返回的 usage 结算，缺失时保守估算；不是费用账单。独立样例最多 3 路并发，重启后续用已完成步骤；用于验证重复性的两次摘要仍须独立生成。'));
+  replay?.error?h('div',{className:'dcc-callout is-warn',role:'status'},h('p',null,replay.error)):null,
+  h('div',{className:'dcc-actions'},
+   h('button',{type:'button',className:'dcc-btn dcc-btn-primary',disabled:!config?.enabled||replay?.running,onClick:()=>onAction()},replay?.running?'正在回放…':enabled?'继续 / 开始校准':'运行三路诊断（不启用自动校准）'),
+   enabled?h('p',{className:'dcc-hint'},'手动继续同样遵守每日预算；恢复不会把已完成的同一轮任务重新计作独立验证。'):null),
+  last?h('details',{className:'dcc-more'},h('summary',null,progress?'本次运行用量':'最近一次运行用量'),
+   h('div',{className:'dcc-meta'},
+    h('span',null,progress?'本次运行已用时 ':'最近运行耗时 ',h('b',null,duration(progress?Date.now()-last.startedAt:last.elapsedMs))),
+    h('span',null,'本次运行时限 ',h('b',null,duration(last.timeoutMs))),
+    h('span',null,'DSH 阅读/提案调用 ',h('b',null,last.readerCalls??0)),
+    h('span',null,'完整压缩流水线 ',h('b',null,last.pipelineCalls??0)),
+    h('span',null,'独立条款审核 ',h('b',null,last.proposalReviews??0)))):null);
+}
+function PolicyCard({replay,onAction}){
+ const policy=replay?.effectivePolicy,last=replay?.policy?.last,version=policy?.version??0;
+ const rules=policy?.rules||[],clauses=policy?.clauses||[];
+ return h('section',{className:'dcc-card','aria-labelledby':'dcc-policy-title'},
+  h('div',{className:'dcc-card-head'},h('div',null,h('h3',{id:'dcc-policy-title'},'当前摘要策略'),h('p',{className:'dcc-card-kicker'},'正式压缩实际使用的版本')),
+   h('span',{className:'dcc-pill dcc-tone-'+(version>0?'accent':'neutral')},version>0?'已采用校准条款':'基础策略')),
+  h('div',{className:'dcc-version'},h('b',null,'当前实际策略 v'+version),h('span',null,'预设条款 '+rules.length+' 条 · 模型提出的条款 '+clauses.length+' 条')),
+  rules.length?h('ul',{className:'dcc-tags','aria-label':'预设条款'},rules.map(rule=>h('li',{key:rule,className:'dcc-tag'},rule))):null,
+  clauses.length?h('ul',{className:'dcc-clauses'},clauses.map(clause=>h('li',{key:clause.id},
+   h('strong',null,'新条款 · '+clause.when),
+   h('div',null,'保留内容 · '+clause.retain.join('、')),h('div',null,'需要保留的关系 · '+clause.relation),
+   h('small',{title:clause.id},'条款编号 '+clause.id)))):null,
+  last?h('div',{className:'dcc-callout'},h('p',null,clock(last.at)+' · '+last.reason+(last.clauseReviewer?' · 配置的审核模型 '+last.clauseReviewer:'')),
+   last.gates?.repeatable?h('p',null,'重复验证：'+(last.gates.repeatable.passed?'通过':'未通过')+' · 至少两次重生成，旧策略目标题须两次失败，新策略目标题及留出正例、反例须两次通过。'):null):
+   h('p',{className:'dcc-hint'},'还没有校准结论。发现可复现的遗漏后才会生成候选条款。'),
+  policy?.proof?h('details',{className:'dcc-more'},h('summary',null,'当前策略采用时的验证记录'),h('pre',{className:'dcc-raw'},JSON.stringify(policy.proof,null,2))):null,
+  last?.before?h('details',{className:'dcc-more'},h('summary',null,'查看旧策略与候选的逐项证据'),h('pre',{className:'dcc-raw'},JSON.stringify({before:last.before,after:last.after,gates:last.gates,proposed:last.proposed},null,2))):null,
+  replay?.policy?.previous?h('div',{className:'dcc-actions'},h('button',{type:'button',className:'dcc-btn',disabled:replay.running,onClick:()=>onAction('rollback-replay-policy')},'恢复上一策略')):null);
+}
+function laneBadge(lane){
+ const [tone,text]=lane?.pass?['ok','通过']:lane?.error?['warn','出错']:['bad','未通过'];
+ return h('span',{className:'dcc-badge dcc-tone-'+tone},text);
+}
+function DiagnosticCard({report}){
+ const probes=report?.probes||[];
+ return h('section',{className:'dcc-card dcc-section','aria-labelledby':'dcc-diag-title'},
+  h('div',{className:'dcc-card-head'},h('div',null,h('h3',{id:'dcc-diag-title'},'最近一次三路诊断'),
+   h('p',{className:'dcc-card-kicker'},report?report.provider+' / '+report.model+' · '+clock(report.at):'同一道题分别给阅读模型完整原文、只给摘要、给摘要并允许回查'))),
+  probes.length?h('div',{className:'dcc-table-wrap'},h('table',{className:'dcc-table'},
+   h('thead',null,h('tr',null,['问题','结论','原文','摘要','可回查'].map(x=>h('th',{key:x,scope:'col'},x)))),
+   h('tbody',null,probes.map(p=>h('tr',{key:p.id},
+    h('td',null,replayLabels[p.id]||p.id),h('td',null,replayLabels[p.classification]||p.classification),
+    ...['full','summary','retrieval'].map(k=>h('td',{key:k},laneBadge(p.lanes?.[k])))))))):
+   h('p',{className:'dcc-hint'},'还没有诊断结果。运行校准或三路诊断后，这里会列出每道题在三种条件下是否答对并给出依据。'));
 }
 const harvestLabels={cancelled:'已取消',conflict:'题目隔离冲突',admitted:'样例审核通过',added:'已加入动态题库',duplicate:'已有对应样例',full:'题库已满',held:'暂未采用',clean:'未复现压缩遗漏',unavailable:'本次未完成',failed:'本次未完成',skipped:'本次未收集',queued:'等待后台处理',running:'正在检查',cleared:'已清空动态题库',interrupted:'上次处理已中断'};
 function HarvestBank({state,draft,set,onAction}){
@@ -421,22 +541,27 @@ function HarvestBank({state,draft,set,onAction}){
  const current=info?info.blockedReason?'已暂停：交叉审核关闭':info.running?'正在提炼和验证':info.enabled?'已开启，等待压缩结果':'已关闭':'尚未读取运行状态';
  const entries=info?.entries||[];
  const modelNames=models=>Array.isArray(models)?models.join(' / '):models&&typeof models==='object'?Object.values(models).filter(x=>typeof x==='string').join(' / '):typeof models==='string'?models:'—';
- return h('section',{className:'dcc-group','aria-labelledby':'dcc-harvest-title'},
-  h('div',{className:'dcc-head'},h('h3',{id:'dcc-harvest-title'},'从实际遗漏更新回放题库'),
-   h('span',{className:'dcc-pill dcc-tone-'+(info?.running?'warn':info?.enabled?'ok':'neutral')},current)),
-  h('label',{className:'dcc-master'},h(Switch,{checked:!!draft.replayHarvestEnabled,label:'从正式压缩中提炼脱敏回放样例',onChange:v=>set('replayHarvestEnabled',v)}),'自动提炼脱敏样例'),
-  info?.blockedReason?h('p',{role:'status',className:'dcc-hint'},info.blockedReason):null,
-  h('p',{className:'dcc-sub'},'提炼开关保留默认开启，但必须同时启用交叉审核才能运行。关闭交叉审核会取消正在处理的提炼并清空待处理原文；重新开启后只处理新任务。'),
-  h('p',{className:'dcc-sub'},'在正式压缩得到候选摘要后，后台核对原文与摘要。确认遗漏后，模型改写为另一种虚构情境，独立审核脱敏程度、含义和答案，再验证原文、摘要与回查三路。回放自身不再产生新题。'),
-  h('p',{className:'dcc-hint'},'原文发送范围：最多 120,000 字符的本次正式压缩原文及候选摘要，会交给生成模型 '+(state?.config?.aProvider||'DSH')+' / '+(state?.config?.aModel||'当前模块 A 模型')+'，并交给独立审核模型 '+(info?.reviewModel||state?.config?.reviewModel||'当前审核模型')+'。审核接口：'+(info?.reviewEndpoint||(state?.config?.reviewBase?state.config.reviewBase.replace(/\/$/,'')+'/responses':'尚未读取'))+'。脱敏发生在模型处理之后，不是在发送原文之前。'),
-  h('p',{className:'dcc-hint'},'提炼使用独立的每日任务额度，不计入上方策略校准的每日请求 / token 预算。一次完整提炼按流程包含 15–27 次模型请求；提前放弃会更少，底层服务自身重试另计。每日 4 次指任务次数，不是 4 次模型调用。'),
-  h('div',{className:'dcc-meta'},
+ const tone=info?.blockedReason?'warn':info?.running?'warn':info?.enabled?'ok':'neutral';
+ const endpoint=info?.reviewEndpoint||(state?.config?.reviewBase?state.config.reviewBase.replace(/\/$/,'')+'/responses':'尚未读取');
+ return h('section',{className:'dcc-card dcc-section'+(info?.blockedReason?' is-attention':''),'aria-labelledby':'dcc-harvest-title'},
+  h('div',{className:'dcc-card-head'},h('div',null,h('h3',{id:'dcc-harvest-title'},'从实际遗漏更新回放题库'),h('p',{className:'dcc-card-kicker'},'把正式压缩里确认的遗漏改写成虚构样例，供后续校准使用')),
+   h('span',{className:'dcc-pill dcc-tone-'+tone,role:'status'},current)),
+  h('div',{className:'dcc-toggle-row'},h(Switch,{checked:!!draft.replayHarvestEnabled,label:'从正式压缩中提炼脱敏回放样例',onChange:v=>set('replayHarvestEnabled',v)}),
+   h('div',null,h('strong',null,'自动提炼脱敏样例'),h('span',null,'提炼开关保留默认开启，但必须同时启用交叉审核才能运行。关闭交叉审核会取消正在处理的提炼并清空待处理原文；重新开启后只处理新任务。'))),
+  info?.blockedReason?h('div',{className:'dcc-callout is-warn',role:'status'},h('p',null,info.blockedReason)):null,
+  h('div',{className:'dcc-callout'},
+   h('p',null,h('strong',null,'原文发送范围'),'：最多 120,000 字符的本次正式压缩原文及候选摘要，会交给生成模型 '+(state?.config?.aProvider||'DSH')+' / '+(state?.config?.aModel||'当前模块 A 模型')+'，并交给独立审核模型 '+(info?.reviewModel||state?.config?.reviewModel||'当前审核模型')+'。'),
+   h('p',null,'审核接口：',h('code',null,endpoint),'。脱敏发生在模型处理之后，不是在发送原文之前。')),
+  h('div',{className:'dcc-meta',style:{marginTop:'14px'}},
    h('span',null,'已审核入库 ',h('b',null,info?.approvedCount??'—'),' 组'),
    h('span',null,'队列 ',h('b',null,info?.queued??'—')),
    h('span',null,'今日提炼任务 ',h('b',null,info?.today?info.today.attempts+' / '+info.today.limit:'—'))),
-  info?.last?h('p',{role:'status'},clock(info.last.at)+' · '+(harvestLabels[info.last.status]||info.last.status)+(info.last.reason?' · '+info.last.reason:'')):null,
+  h('p',{className:'dcc-hint'},'提炼使用独立的每日任务额度，不计入上方策略校准的每日请求 / token 预算。一次完整提炼按流程包含 15–27 次模型请求；提前放弃会更少，底层服务自身重试另计。每日 4 次指任务次数，不是 4 次模型调用。'),
+  info?.last?h('p',null,clock(info.last.at)+' · '+(harvestLabels[info.last.status]||info.last.status)+(info.last.reason?' · '+info.last.reason:'')):null,
   info?.nextRetryAt>Date.now()?h('p',{className:'dcc-hint'},'恢复后最早再试：'+clock(info.nextRetryAt)):null,
-  h('p',null,'入库表示可以参加回放，不代表策略已经改变。后台先分批建立现行策略的基线，新样例可进入后续诊断；完成初始化后，新题库按 24 小时窗口参与对照，其余新题合并等待。仍需通过独立正例、边界反例、重复验证和无退步检查。'),
+  h('details',{className:'dcc-more'},h('summary',null,'提炼如何进行'),
+   h('p',null,'在正式压缩得到候选摘要后，后台核对原文与摘要。确认遗漏后，模型改写为另一种虚构情境，独立审核脱敏程度、含义和答案，再验证原文、摘要与回查三路。回放自身不再产生新题。'),
+   h('p',null,'入库表示可以参加回放，不代表策略已经改变。后台先分批建立现行策略的基线，新样例可进入后续诊断；完成初始化后，新题库按 24 小时窗口参与对照，其余新题合并等待。仍需通过独立正例、边界反例、重复验证和无退步检查。')),
   h('details',{className:'dcc-more'},h('summary',null,'收集范围与保存方式'),
    h('p',null,'只观察启用后的正式压缩，不扫描旧聊天目录。来源原文与原摘要只在本次后台任务内存中使用；本地题库保存审核通过的虚构样例、摘要指纹和模型信息，不保存正式聊天片段。'),
    h('p',null,'原文会交给配置的模型进行临时核对，不给模型工具权限。程序检查敏感字面量和复制内容，并由独立模型复核；这些检查不能保证绝对匿名。'),
@@ -444,8 +569,30 @@ function HarvestBank({state,draft,set,onAction}){
    h('p',null,'服务故障后至少等待 1 小时再试。关闭宿主会丢弃未完成的内存任务；已审核入库的样例仍保留。页面每 5 秒只读刷新。')),
   entries.length?h('details',{className:'dcc-more'},h('summary',null,'已入库样例的审核记录（'+entries.length+'）'),
    ...entries.map(entry=>h('p',{key:entry.id},clock(entry.createdAt)+' · '+entry.id+' · '+modelNames(entry.models)))):null,
-  h('button',{type:'button',className:'dcc-btn',disabled:!info||!info.approvedCount||info.running||state?.replay?.running,onClick:()=>onAction('clear-learned-cases')},'清空动态题库（保留当前策略）'));
+  h('div',{className:'dcc-actions'},h('button',{type:'button',className:'dcc-btn',disabled:!info||!info.approvedCount||info.running||state?.replay?.running,onClick:()=>onAction('clear-learned-cases')},'清空动态题库（保留当前策略）')));
 }
+function Learning({state,draft,base,set,onAction}){
+ const calibrationGroup=GROUPS.find(g=>g.tab==='learning');
+ return h('div',{className:'dcc-learning'},
+  h('div',{className:'dcc-cols'},
+   h(CalibrationCard,{replay:state?.replay,calibration:state?.calibration,config:state?.config,draft,set,onAction}),
+   h(PolicyCard,{replay:state?.replay,onAction})),
+  h(DiagnosticCard,{report:state?.replay?.report}),
+  h(Group,{g:calibrationGroup,draft,base,set}),
+  h(HarvestBank,{state,draft,set,onAction}),
+  h('details',{className:'dcc-more dcc-section'},h('summary',null,'校准如何运作、预算如何计数'),
+   h('ul',null,
+    h('li',null,'开启后先在后台小批初始化，保存每个完成的步骤；达到调用、token 或时间预算就暂停，下一次窗口接着进行。现行策略存在可复现遗漏时，模型再提出新条款，完成独立审核、重复对照和无退步检查后才采用。常规完成窗口为七天，新样例窗口为 24 小时；暂停和技术失败都不算完成。'),
+    h('li',null,'请求预算统计每次实际模型请求，完整流水线会包含多次请求。token 按服务返回的 usage 结算，缺失时保守估算；不是费用账单。独立样例最多 3 路并发，重启后续用已完成步骤；用于验证重复性的两次摘要仍须独立生成。'),
+    h('li',null,'动态题库会参与后续回放，也可在本插件数据目录放置 feedback-cases.json 添加问题及独立留出题，格式见 README。样例会提交给配置的模型；页面刷新只读取结果。通过验证的条款从下一次压缩开始使用。'))));
+}
+function tabBadge(keys,changes,errors){
+ const bad=errors.filter(k=>keys.has(k)).length,changed=changes.filter(k=>keys.has(k)).length;
+ return bad?h('span',{className:'dcc-count dcc-tone-bad'},bad+' 项需修改'):changed?h('span',{className:'dcc-count dcc-tone-accent'},changed+' 项未保存'):null;
+}
+const SETTINGS_KEYS=new Set(GROUPS.filter(g=>!g.tab).flatMap(g=>g.fields.map(([k])=>k)));
+const LEARNING_KEYS=new Set([...GROUPS.filter(g=>g.tab==='learning').flatMap(g=>g.fields.map(([k])=>k)),'replayFeedbackEnabled','replayHarvestEnabled']);
+const TABS=[['settings','设置'],['learning','学习与校准'],['runs','运行记录']];
 function Panel(){
  const [state,setState]=R.useState(null),[draft,setDraft]=R.useState(null),[loadError,setLoadError]=R.useState('');
  const [tab,setTab]=R.useState('settings'),[saving,setSaving]=R.useState(false),[flash,setFlash]=R.useState(null);
@@ -487,6 +634,7 @@ function Panel(){
  const [tone,healthText]=healthOf(state,loadError);
  const runs=state?.runs||[];
  const failed=runs.filter(r=>r.status==='failed').length;
+ const learning=calibrationView(state?.replay,state?.calibration,state?.config);
  return h('section',{className:'dcc','aria-labelledby':'dcc-title'},
   h('style',null,CSS),
   h('header',{className:'dcc-head'},
@@ -499,35 +647,17 @@ function Panel(){
   h(R.Fragment,null,
    h(Flow,{d:draft,set,saved:base?String(base.enabled)===String(draft.enabled):true}),
    h(PolicyScope,{scope:state?.replay?.scope}),
-   h('details',{className:'dcc-more'},h('summary',null,'历史原文检索 · SQLite 全文索引'),
-    h('p',null,'search_context 可定位压缩前的原始记录、摘要和附件说明。两字人名使用短词索引，刚发送但尚未保存的消息也参与本轮检索。命中后可继续读取原文。'),
-    h('p',null,'首次查询会建立可重建的本地索引，之后按记录变化更新；查询在工作线程运行。索引故障会明确提示搜索未完成，不代表原文不存在。搜索本身不调用外部模型。')),
-   h('p',{className:'dcc-lede'},state?.retrieval?.enabled===true?'大工具结果按需取回已配置。Anthropic / OpenAI Chat Completions 插件通道从 '+state.retrieval.minToolTokens+' tokens 起可保留原件，以 '+state.retrieval.tool+' 取回。Responses 浏览器任务通过 browser_progress 查看证据。':state?.retrieval?.enabled===false?'大工具结果按需取回未开启。':'大工具结果取回配置暂未读到。'),
-   h('details',{className:'dcc-more'},h('summary',null,'三路回放与自动压缩策略'),
-    h('label',{className:'dcc-master'},h(Switch,{checked:!!draft.replayFeedbackEnabled,label:'回放验证后自动应用压缩策略',onChange:v=>set('replayFeedbackEnabled',v)}),'回放验证后自动应用'),
-    h('p',null,'开启后先在后台小批初始化，保存每个完成的步骤；达到调用、token 或时间预算就暂停，下一次窗口接着进行。现行策略存在可复现遗漏时，模型再提出新条款，完成独立审核、重复对照和无退步检查后才采用。常规完成窗口为七天，新样例窗口为 24 小时；暂停和技术失败都不算完成。'),
-    h(ReplayProgress,{replay:state?.replay,calibration:state?.calibration,enabled:state?.config?.replayFeedbackEnabled,config:state?.config}),
-    h('p',null,'当前实际策略 v'+(state?.replay?.effectivePolicy?.version??0)+' · 预设条款 '+(state?.replay?.effectivePolicy?.rules?.length||0)+' 条 · 模型提出的条款 '+(state?.replay?.effectivePolicy?.clauses?.length||0)+' 条'),
-    state?.replay?.effectivePolicy?.rules?.length?h('p',null,'预设条款 · '+state.replay.effectivePolicy.rules.join(' / ')):null,
-    ...(state?.replay?.effectivePolicy?.clauses||[]).map(clause=>h('details',{className:'dcc-more',key:clause.id},h('summary',null,'新条款 · '+clause.when),
-      h('p',null,'保留内容 · '+clause.retain.join('、')),h('p',null,'需要保留的关系 · '+clause.relation),h('small',null,'条款编号 '+clause.id))),
-    state?.replay?.effectivePolicy?.proof?h('details',null,h('summary',null,'当前策略采用时的验证记录'),h('pre',{className:'dcc-raw'},JSON.stringify(state.replay.effectivePolicy.proof,null,2))):null,
-    state?.replay?.policy?.last?h('p',null,clock(state.replay.policy.last.at)+' · '+state.replay.policy.last.reason+(state.replay.policy.last.clauseReviewer?' · 配置的审核模型 '+state.replay.policy.last.clauseReviewer:'')):null,
-    state?.replay?.policy?.last?.gates?.repeatable?h('p',null,'重复验证：'+(state.replay.policy.last.gates.repeatable.passed?'通过':'未通过')+' · 至少两次重生成，旧策略目标题须两次失败，新策略目标题及留出正例、反例须两次通过。'):null,
-    state?.replay?.policy?.last?.before?h('details',null,h('summary',null,'查看旧策略与候选的逐项证据'),h('pre',{className:'dcc-raw'},JSON.stringify({before:state.replay.policy.last.before,after:state.replay.policy.last.after,gates:state.replay.policy.last.gates,proposed:state.replay.policy.last.proposed},null,2))):null,
-    state?.replay?.policy?.previous?h('button',{className:'dcc-btn',disabled:state.replay.running,onClick:()=>replay('rollback-replay-policy')},'恢复上一策略'):null,
-    h('p',null,'动态题库会参与后续回放，也可在本插件数据目录放置 feedback-cases.json 添加问题及独立留出题，格式见 README。样例会提交给配置的模型；页面刷新只读取结果。通过验证的条款从下一次压缩开始使用。'),
-    h('button',{className:'dcc-btn',disabled:!state?.config?.enabled||state?.replay?.running,onClick:()=>replay()},state?.replay?.running?'正在回放…':state?.config?.replayFeedbackEnabled?'继续 / 开始校准':'运行三路诊断（不启用自动校准）'),
-    state?.config?.replayFeedbackEnabled?h('p',{className:'dcc-hint'},'手动继续同样遵守每日预算；恢复不会把已完成的同一轮任务重新计作独立验证。'):null,
-    state?.replay?.error?h('p',null,state.replay.error):null,
-    state?.replay?.report?h('p',null,state.replay.report.provider+' / '+state.replay.report.model+' · '+clock(state.replay.report.at)):null,
-    ...(state?.replay?.report?.probes||[]).map(p=>h('p',{key:p.id},(replayLabels[p.id]||p.id)+' · '+(replayLabels[p.classification]||p.classification)+' · '+['full','summary','retrieval'].map((k,i)=>['原文','摘要','可回查'][i]+(p.lanes[k].pass?'通过':p.lanes[k].error?'出错':'未通过')).join(' / '))),
-    h(HarvestBank,{state,draft,set,onAction:replay})),
-   h('div',{className:'dcc-tabs',role:'tablist'},
-    h('button',{type:'button',role:'tab',id:'dcc-tab-settings','aria-selected':tab==='settings'?'true':'false','aria-controls':'dcc-panel-settings',className:'dcc-tab',onClick:()=>setTab('settings')},'设置',changes.length?h('span',{className:'dcc-count'},`${changes.length} 项未保存`):null),
-    h('button',{type:'button',role:'tab',id:'dcc-tab-runs','aria-selected':tab==='runs'?'true':'false','aria-controls':'dcc-panel-runs',className:'dcc-tab',onClick:()=>setTab('runs')},'运行记录',failed?h('span',{className:'dcc-count dcc-tone-bad'},`${failed} 次失败`):null)),
-   h('div',{role:'tabpanel',id:'dcc-panel-'+tab,'aria-labelledby':'dcc-tab-'+tab},
-    tab==='settings'?h(Settings,{draft,base,set}):h(Runs,{runs,notice:state?.notice,onRefresh:refresh})),
+   h('div',{className:'dcc-tabs',role:'tablist','aria-label':'协作压缩设置'},TABS.map(([id,title],i)=>{
+    const badge=id==='settings'?tabBadge(SETTINGS_KEYS,changes,errors):id==='learning'?tabBadge(LEARNING_KEYS,changes,errors)||h('span',{className:'dcc-count dcc-tone-'+learning.tone},learning.short):failed?h('span',{className:'dcc-count dcc-tone-bad'},`${failed} 次失败`):null;
+    return h('button',{key:id,type:'button',role:'tab',id:'dcc-tab-'+id,'aria-selected':tab===id?'true':'false','aria-controls':'dcc-panel-'+id,tabIndex:tab===id?0:-1,className:'dcc-tab',
+     onClick:()=>setTab(id),onKeyDown:e=>{
+      const step=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;if(!step)return;e.preventDefault();
+      const next=TABS[(i+step+TABS.length)%TABS.length][0];setTab(next);document.getElementById('dcc-tab-'+next)?.focus();
+     }},title,badge);
+   })),
+   h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-settings','aria-labelledby':'dcc-tab-settings',hidden:tab!=='settings'},h(Settings,{draft,base,set,retrieval:state?.retrieval})),
+   h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-learning','aria-labelledby':'dcc-tab-learning',hidden:tab!=='learning'},h(Learning,{state,draft,base,set,onAction:replay})),
+   h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-runs','aria-labelledby':'dcc-tab-runs',hidden:tab!=='runs'},h(Runs,{runs,notice:state?.notice,onRefresh:refresh})),
    flash&&!changes.length?h('div',{className:'dcc-flash dcc-tone-'+flash.tone,role:'status'},flash.text):null,
    changes.length||(flash&&flash.tone==='bad')?h('div',{className:'dcc-bar',role:'region','aria-label':'未保存的更改'},
     h('div',{className:'dcc-bar-text',role:'status'},flash?.tone==='bad'?flash.text:errors.length?h(R.Fragment,null,h('strong',null,`${errors.length} 项需要修改`),'，改好后才能保存'):h(R.Fragment,null,h('strong',null,`${changes.length} 项更改`),'尚未保存')),
