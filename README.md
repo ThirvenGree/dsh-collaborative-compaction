@@ -28,7 +28,15 @@ DSH 设置 → 多模型协作压缩。可配置开关、模型、环境变量�
 
 `node --test test/*.test.js`；引擎运行 `tests/collaborative-transaction.test.ts` 与已有 external-summary、DSH native 测试。真实模型测试仅使用合成内容，避免把现有私人聊天当作测试数据。
 
-CI 使用 `.node-version` 中的 Node `22.22.2` 和 `packageManager` 指定的 npm `10.9.7`，通过 `npm ci --ignore-scripts` 安装锁定依赖。`scripts/check-dependencies.mjs` 会逐项检查清单、锁文件和实际安装版本，包括引擎的工作区依赖；引擎任务还实际打开内存 SQLite，并执行 FTS5 trigram 查询。插件和引擎补丁都在 Windows、macOS、Linux 验证。分词器直接依赖固定为 `js-tiktoken 1.0.21`。本地准备脚本同样核对依赖和 SQLite，但不强制用户必须使用同一补丁版本的 Node。
+CI 使用 `.node-version` 中的 Node `22.22.2` 和 `packageManager` 指定的 npm `10.9.7`，通过 `npm ci --ignore-scripts` 安装锁定依赖。`scripts/check-dependencies.mjs` 会逐项检查清单、锁文件和实际安装版本，包括引擎的工作区依赖；引擎任务还实际打开内存 SQLite，并执行 FTS5 trigram 查询。CI 配置包含 Windows、macOS、Linux，是否通过须查看对应提交的 Actions 结果。分词器直接依赖固定为 `js-tiktoken 1.0.21`。本地准备脚本同样核对依赖和 SQLite，但不强制用户必须使用同一补丁版本的 Node。
+
+### 0.1.212 迁移验证（2026-11-04，隔离副本）
+
+- 安装脚本与 CI 同时固定上游提交 `daa082ead8a8ead60311e29ad4627bff0f569fc1`，使用 `patches/billion-context-v0.1.212.patch`。补丁已在该提交的干净索引上通过检查和应用。
+- 本地内核仍有原文搜索说明的定制，版本记录为 `0.0.178-censhu.1`；依赖检查同时验证引擎版本、定制内核和工作区锁文件，拒绝旧版本或混装依赖。
+- 插件测试 146/146；DSH native 完整文件 74/74；增量传输、原生工具绑定和状态来源等另外 10 个测试文件 110/110。旧验收记录里的 SQLite 清理与运行时恢复测试问题已在测试资源生命周期中修正。
+- 只读查询本机 QQ 与生活会话的有效命令，两者的 `/compact` 均指向本插件的协作事务入口；未在正式会话执行压缩。新增回归验证模型工具参数不能伪装手动重试、关闭协作或没有合法范围时不会发起压缩。
+- 测试使用临时会话、数据库和模拟上游，不调用付费模型，也不写入正式角色记忆。本机验证不替代对应提交的远端 CI，也不代表重新完成了付费 API 全链路验收。
 
 ### 本机验收记录（2026-11-01）
 
