@@ -105,7 +105,7 @@ export function replaySearch(searchEvidence){
  return (records,query,id,observe)=>{
   const scope='isolated-replay:'+hash([id,records]);
   const session={id:scope,state:{blocks:[],messageRefs:{byRaw:{}}},blockContents:new Map()};
-  return searchEvidence(session,query,4,[],records.map(r=>({...r,contentType:'text'})),undefined,observe)||'[无匹配]';
+  return searchEvidence(session,query,4,[],records.map(r=>({...r,contentType:'text'})),undefined,observe,{cache:false})||'[无匹配]';
  };
 }
 const privateMaterial=/(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{12,}|AIza[\w-]{26,}|Bearer\s+[\w./+=-]{10,}|(?:密码|密钥|令牌|password|api[_-]?key)\s*[:=：]\s*\S+)/i;

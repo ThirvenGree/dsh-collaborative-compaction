@@ -50,7 +50,7 @@ test('authenticated production compression learns isolated synthetic cases, repl
  env(vars);t.after(()=>{globalThis.fetch=realFetch;env(previous);fs.rmSync(dir,{recursive:true,force:true});});
  const {defaults,config}=await import('../runtime.js'),{apply}=await import('../host.js');const {scopeOf}=await import('../policy-scope.js');
  fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replaySliceCalls:100,replayDailyCalls:10000,replayDailyTokens:100000000,replayFeedbackEnabled:false,replayHarvestEnabled:true,
-  claudeEnabled:false,reviewEnabled:false,plannerEnabled:false,factCheckEnabled:false,
+  claudeEnabled:false,reviewEnabled:true,plannerEnabled:false,factCheckEnabled:false,
   aProvider:'fixture',aModel:'fixture-author',reviewBase:fakeBase,reviewKeyEnv:'LOCAL_HARVEST_REVIEW_KEY',retries:0}));
  fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:engine}));
  const bankFile=path.join(dir,'learned-replay-cases.json'),harvestFile=path.join(dir,'harvest-status.json'),reportFile=path.join(dir,'fixture-replay.json');
@@ -62,6 +62,7 @@ test('authenticated production compression learns isolated synthetic cases, repl
   const target=new URL(url);if(target.hostname==='127.0.0.1')return realFetch(url,options);
   if(target.href!==fakeBase+'/responses'){forbiddenTransport++;throw Error('Unexpected external transport');}
   const request=JSON.parse(options.body),input=JSON.parse(request.input.slice(request.input.indexOf('{')));
+  if(!input.task)return Response.json({status:'completed',output:[{content:[{type:'output_text',text:input.summaryA}]}]});
   assert.equal(input.task,'review-replay-case');assert.equal(request.store,false);reviews.push(input);
   if(phase==='review-error')throw Error(secretError);
   return Response.json({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({decision:'approve',privacy:true,fidelity:true,answers:true,generalization:true,safe:true})}]}]});
@@ -125,7 +126,10 @@ test('authenticated production compression learns isolated synthetic cases, repl
   return !value.replay.harvest.running&&value.replay.harvest.last?.status===status&&value;
  },'harvest settles as '+status);}
  try{
-  await start();await compress();const admitted=await settled('added');
+  await start();
+  const off=await settings({reviewEnabled:false});assert.equal(off.replay.harvest.enabled,false);assert.equal(off.replay.harvest.configured,true);assert.match(off.replay.harvest.blockedReason,/交叉审核已关闭/);
+  await compress('交叉审核关闭时不得自动提炼。');await delay(30);assert.equal(detectors.length,0);assert.equal(reviews.length,0);
+  await settings({reviewEnabled:true});await compress();const admitted=await settled('added');
   assert.equal(admitted.replay.harvest.approvedCount,1);assert.equal(detectors.length,1);assert.equal(reviews.length,1);
   assert.equal(admitted.replay.effectivePolicy.version,0,'admission does not itself activate a policy');
   assert.equal(admitted.replay.report,null,'learning works while auto strategy feedback is off');

@@ -418,18 +418,22 @@ function ReplayProgress({replay,calibration,enabled,config}){
 const harvestLabels={cancelled:'已取消',conflict:'题目隔离冲突',admitted:'样例审核通过',added:'已加入动态题库',duplicate:'已有对应样例',full:'题库已满',held:'暂未采用',clean:'未复现压缩遗漏',unavailable:'本次未完成',failed:'本次未完成',skipped:'本次未收集',queued:'等待后台处理',running:'正在检查',cleared:'已清空动态题库',interrupted:'上次处理已中断'};
 function HarvestBank({state,draft,set,onAction}){
  const info=state?.replay?.harvest;
- const current=info?info.running?'正在提炼和验证':info.enabled?'已开启，等待压缩结果':'已关闭':'尚未读取运行状态';
+ const current=info?info.blockedReason?'已暂停：交叉审核关闭':info.running?'正在提炼和验证':info.enabled?'已开启，等待压缩结果':'已关闭':'尚未读取运行状态';
  const entries=info?.entries||[];
  const modelNames=models=>Array.isArray(models)?models.join(' / '):models&&typeof models==='object'?Object.values(models).filter(x=>typeof x==='string').join(' / '):typeof models==='string'?models:'—';
  return h('section',{className:'dcc-group','aria-labelledby':'dcc-harvest-title'},
   h('div',{className:'dcc-head'},h('h3',{id:'dcc-harvest-title'},'从实际遗漏更新回放题库'),
    h('span',{className:'dcc-pill dcc-tone-'+(info?.running?'warn':info?.enabled?'ok':'neutral')},current)),
   h('label',{className:'dcc-master'},h(Switch,{checked:!!draft.replayHarvestEnabled,label:'从正式压缩中提炼脱敏回放样例',onChange:v=>set('replayHarvestEnabled',v)}),'自动提炼脱敏样例'),
+  info?.blockedReason?h('p',{role:'status',className:'dcc-hint'},info.blockedReason):null,
+  h('p',{className:'dcc-sub'},'提炼开关保留默认开启，但必须同时启用交叉审核才能运行。关闭交叉审核会取消正在处理的提炼并清空待处理原文；重新开启后只处理新任务。'),
   h('p',{className:'dcc-sub'},'在正式压缩得到候选摘要后，后台核对原文与摘要。确认遗漏后，模型改写为另一种虚构情境，独立审核脱敏程度、含义和答案，再验证原文、摘要与回查三路。回放自身不再产生新题。'),
+  h('p',{className:'dcc-hint'},'原文发送范围：最多 120,000 字符的本次正式压缩原文及候选摘要，会交给生成模型 '+(state?.config?.aProvider||'DSH')+' / '+(state?.config?.aModel||'当前模块 A 模型')+'，并交给独立审核模型 '+(info?.reviewModel||state?.config?.reviewModel||'当前审核模型')+'。审核接口：'+(info?.reviewEndpoint||(state?.config?.reviewBase?state.config.reviewBase.replace(/\/$/,'')+'/responses':'尚未读取'))+'。脱敏发生在模型处理之后，不是在发送原文之前。'),
+  h('p',{className:'dcc-hint'},'提炼使用独立的每日任务额度，不计入上方策略校准的每日请求 / token 预算。一次完整提炼按流程包含 15–27 次模型请求；提前放弃会更少，底层服务自身重试另计。每日 4 次指任务次数，不是 4 次模型调用。'),
   h('div',{className:'dcc-meta'},
    h('span',null,'已审核入库 ',h('b',null,info?.approvedCount??'—'),' 组'),
    h('span',null,'队列 ',h('b',null,info?.queued??'—')),
-   h('span',null,'今日提炼 ',h('b',null,info?.today?info.today.attempts+' / '+info.today.limit:'—'))),
+   h('span',null,'今日提炼任务 ',h('b',null,info?.today?info.today.attempts+' / '+info.today.limit:'—'))),
   info?.last?h('p',{role:'status'},clock(info.last.at)+' · '+(harvestLabels[info.last.status]||info.last.status)+(info.last.reason?' · '+info.last.reason:'')):null,
   info?.nextRetryAt>Date.now()?h('p',{className:'dcc-hint'},'恢复后最早再试：'+clock(info.nextRetryAt)):null,
   h('p',null,'入库表示可以参加回放，不代表策略已经改变。后台先分批建立现行策略的基线，新样例可进入后续诊断；完成初始化后，新题库按 24 小时窗口参与对照，其余新题合并等待。仍需通过独立正例、边界反例、重复验证和无退步检查。'),

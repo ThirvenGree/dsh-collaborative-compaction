@@ -48,12 +48,15 @@ function validatedOmission(draft,content,summary){
 }
 function errorIn(report){return report.probes.some(p=>Object.values(p.lanes).some(l=>l.error));}
 
-export async function harvestCase({content,summary,generate,review,provider,model,signal,search}){
+export async function harvestCase({content,summary,generate,review,provider,model,signal,search,assertAllowed=()=>{}}){
  signal?.throwIfAborted();
+ assertAllowed();
  if(typeof content!=='string'||!content.trim()||content.length>120000||typeof summary!=='string'||!summary.trim()||summary.length>100000)
   return held('本次原文或摘要超出自动采样范围，未截断后学习。');
  if(typeof generate!=='function'||typeof review!=='function'||typeof search!=='function'||generate===review)
   return held('自动题库需要独立审核与原文检索接口。');
+ const guarded=fn=>async(...args)=>{assertAllowed();signal?.throwIfAborted();const result=await fn(...args);signal?.throwIfAborted();assertAllowed();return result;};
+ generate=guarded(generate);review=guarded(review);search=guarded(search);
  const route={provider,model,signal},options={generate,search,...route};
  try{
   const draft=await generate(detectPrompt,{task:'detect-compression-omission',frozenHistory:content,summary},route);

@@ -1,5 +1,5 @@
 diff --git a/kernel/src/compress-tools.ts b/kernel/src/compress-tools.ts
-index ab7207c45d89f4b5f368c1d06b532ebdab1e329b..7c322539b92d97e4ba7a9b682116b5fd0b336ae6 100644
+index ab7207c..7c32253 100644
 --- a/kernel/src/compress-tools.ts
 +++ b/kernel/src/compress-tools.ts
 @@ -193,7 +193,7 @@ You have five context-management tools:
@@ -39,7 +39,7 @@ index ab7207c45d89f4b5f368c1d06b532ebdab1e329b..7c322539b92d97e4ba7a9b682116b5fd
        type: "object",
        properties: {
 diff --git a/kernel/src/packs.ts b/kernel/src/packs.ts
-index be73344faa298f8fc54b7ce4f90c384ff3e164d7..ed900c2e426bc6124d685833b8bf0bedc3c95b1f 100644
+index be73344..ed900c2 100644
 --- a/kernel/src/packs.ts
 +++ b/kernel/src/packs.ts
 @@ -195,7 +195,7 @@ const LEAN_TOOL_PROMPTS: ToolPrompts = {
@@ -52,7 +52,7 @@ index be73344faa298f8fc54b7ce4f90c384ff3e164d7..ed900c2e426bc6124d685833b8bf0bed
    acp_status: {
      description:
 diff --git a/reference/architecture.md b/reference/architecture.md
-index acbbd537c12c19fcb8b8373710824136f85c0fdc..3d42c0b143032bbdac9f4e94f9bd2a48a73daea8 100644
+index acbbd53..3d42c0b 100644
 --- a/reference/architecture.md
 +++ b/reference/architecture.md
 @@ -9,6 +9,7 @@
@@ -88,7 +88,7 @@ index acbbd537c12c19fcb8b8373710824136f85c0fdc..3d42c0b143032bbdac9f4e94f9bd2a48
 +
 +- `src/collaborative-background.ts`: staged soft-pressure review; safe-boundary replay on the current session.
 diff --git a/scripts/check-dist-external.mjs b/scripts/check-dist-external.mjs
-index fd71a561273ae1000cd614946c4cabbeb1336c5d..ace366a74b2c2a667033674482db0659d2058af9 100644
+index fd71a56..ace366a 100644
 --- a/scripts/check-dist-external.mjs
 +++ b/scripts/check-dist-external.mjs
 @@ -28,7 +28,7 @@
@@ -110,19 +110,21 @@ index fd71a561273ae1000cd614946c4cabbeb1336c5d..ace366a74b2c2a667033674482db0659
      }
      return refs;
 diff --git a/scripts/live-files.mjs b/scripts/live-files.mjs
-index 315ddf7172ec4d734ac697aa0d965e144e664fb9..8e27295179e578259f7a272a8bd0b243fa817857 100644
+index 315ddf7..6f507f0 100644
 --- a/scripts/live-files.mjs
 +++ b/scripts/live-files.mjs
-@@ -73,6 +73,7 @@ export const LIVE_FILES = [
+@@ -73,6 +73,9 @@ export const LIVE_FILES = [
      // in-memory-only value, so no zone band is needed — the entry is for the
      // tripwire
      "tests/issue4982-draining-twin-ladder.test.ts",
 +    "tests/search-index-dist.test.ts",
++    "tests/search-index-resume.test.ts",
++    "tests/search-index-progress.test.ts",
  ];
  
  /** Band width per live file: the zone ladder drifts +1 per EADDRINUSE retry;
 diff --git a/src/agent/dsh-native.ts b/src/agent/dsh-native.ts
-index 779ec5ff994ceae6d80e5be5ffc06c13c405643a..c049d6ebe1a733a000c09510e9e64a177aa7917a 100644
+index 779ec5f..c049d6e 100644
 --- a/src/agent/dsh-native.ts
 +++ b/src/agent/dsh-native.ts
 @@ -57,7 +57,7 @@ import { ensureProxyRunning, LAUNCHER_DEFAULT_HOST, requestInstanceShutdown } fr
@@ -179,7 +181,7 @@ index 779ec5ff994ceae6d80e5be5ffc06c13c405643a..c049d6ebe1a733a000c09510e9e64a17
      // node:test drives apply() directly with a mock ctx — never patch
      // globalThis.fetch from inside a test run.
 diff --git a/src/agent/shared.ts b/src/agent/shared.ts
-index 9770212b336176a30020991878bf1bdd38300b8c..4e003254ddbe538af7f398679210ea451c0bf143 100644
+index 9770212..4e00325 100644
 --- a/src/agent/shared.ts
 +++ b/src/agent/shared.ts
 @@ -376,8 +376,9 @@ export async function reportAttributionHealth(proxyBase: string, health: Attribu
@@ -196,7 +198,7 @@ index 9770212b336176a30020991878bf1bdd38300b8c..4e003254ddbe538af7f398679210ea45
      // by the host's own session manager — declare it so a stale sibling witness
 diff --git a/src/collaborative-background.ts b/src/collaborative-background.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..a597493a8d29a5315ef12dbb8f1f5beff6035576
+index 0000000..a597493
 --- /dev/null
 +++ b/src/collaborative-background.ts
 @@ -0,0 +1,160 @@
@@ -362,7 +364,7 @@ index 0000000000000000000000000000000000000000..a597493a8d29a5315ef12dbb8f1f5bef
 +}
 diff --git a/src/collaborative-planner.ts b/src/collaborative-planner.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..3ee2f51b4b5ee0f55d3d70c86a28fc8271610083
+index 0000000..3ee2f51
 --- /dev/null
 +++ b/src/collaborative-planner.ts
 @@ -0,0 +1,44 @@
@@ -412,7 +414,7 @@ index 0000000000000000000000000000000000000000..3ee2f51b4b5ee0f55d3d70c86a28fc82
 +}
 diff --git a/src/collaborative-transaction.ts b/src/collaborative-transaction.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..5713b5f74f919fe49648820caea702cae2f0d06a
+index 0000000..5713b5f
 --- /dev/null
 +++ b/src/collaborative-transaction.ts
 @@ -0,0 +1,80 @@
@@ -497,7 +499,7 @@ index 0000000000000000000000000000000000000000..5713b5f74f919fe49648820caea702ca
 +    await backgroundFoldCancellations.get(session)?.();
 +}
 diff --git a/src/decompress-shared.ts b/src/decompress-shared.ts
-index 105d21956f83ee74907f5011cc9665e5a98b5541..96883bd0a850c6af704174e6dcefee3b5391b142 100644
+index 105d219..96883bd 100644
 --- a/src/decompress-shared.ts
 +++ b/src/decompress-shared.ts
 @@ -18,7 +18,8 @@ import { dirname, join, resolve as resolvePath } from "node:path";
@@ -590,7 +592,7 @@ index 105d21956f83ee74907f5011cc9665e5a98b5541..96883bd0a850c6af704174e6dcefee3b
 +    return local;
 +}
 diff --git a/src/external-summary-compress.ts b/src/external-summary-compress.ts
-index 24c0d217e1309de8fbabdbadfbcdcb36f3f2362a..74f0aa3349cf105737a1b2567c13ceb6f4b4dec8 100644
+index 24c0d21..74f0aa3 100644
 --- a/src/external-summary-compress.ts
 +++ b/src/external-summary-compress.ts
 @@ -1,3 +1,4 @@
@@ -730,7 +732,7 @@ index 24c0d217e1309de8fbabdbadfbcdcb36f3f2362a..74f0aa3349cf105737a1b2567c13ceb6
      return applied;
  }
 diff --git a/src/external-summary-http.ts b/src/external-summary-http.ts
-index dd6f7433c6887b64b7234fd51ac36cd1a7a55c14..5c4eac382125fbeb1269e2b86576890d0aabcb10 100644
+index dd6f743..5c4eac3 100644
 --- a/src/external-summary-http.ts
 +++ b/src/external-summary-http.ts
 @@ -228,6 +228,7 @@ export function createSummaryHttpCandidate(target: SummaryHttpTarget, maxRespons
@@ -753,7 +755,7 @@ index dd6f7433c6887b64b7234fd51ac36cd1a7a55c14..5c4eac382125fbeb1269e2b86576890d
                          loggerLog("warn", `[external-summary] candidate ${plan.model} attempt ${attempt}/${SUMMARY_MAX_ATTEMPTS} rejected: HTTP ${dispatched.response.status} (${diagnostics()}) from ${host}${snippet ? ` — ${maskUrlsInText(snippet)}` : ""}`);
                          if (attempt < SUMMARY_MAX_ATTEMPTS && !signal.aborted && isTransientUpstreamError(dispatched.response.status, snippet)) {
 diff --git a/src/external-summary-runtime.ts b/src/external-summary-runtime.ts
-index 56b565b2d39da6fbfd2680c0c9a9763fd445d463..234792911005a1e8abe0ee4209118fc86ec6c425 100644
+index 56b565b..2347929 100644
 --- a/src/external-summary-runtime.ts
 +++ b/src/external-summary-runtime.ts
 @@ -17,6 +17,7 @@ export const _executorForTest = executor;
@@ -780,7 +782,7 @@ index 56b565b2d39da6fbfd2680c0c9a9763fd445d463..234792911005a1e8abe0ee4209118fc8
          for (const item of batch.results) this.stats.attempts += item.attempts.length;
          return batch;
 diff --git a/src/external-summary-settings.ts b/src/external-summary-settings.ts
-index 4e0278882c839c159a5e7ffaeeae2c9bc68b7591..0db09eec3605e2dff7ebe384cae54448ef67cf5d 100644
+index 4e02788..0db09ee 100644
 --- a/src/external-summary-settings.ts
 +++ b/src/external-summary-settings.ts
 @@ -40,6 +40,7 @@ export interface ExternalSummarySettings {
@@ -851,7 +853,7 @@ index 4e0278882c839c159a5e7ffaeeae2c9bc68b7591..0db09eec3605e2dff7ebe384cae54448
 +
 +export { searchEvidence } from "./search-evidence.js";
 diff --git a/src/external-summary.ts b/src/external-summary.ts
-index 622eceb4e5c8ad28f63bc5095be846b7cebb20ff..7447c5fecc0a47be763a2cc0e5338b2de675b632 100644
+index 622eceb..7447c5f 100644
 --- a/src/external-summary.ts
 +++ b/src/external-summary.ts
 @@ -1,4 +1,7 @@
@@ -863,7 +865,7 @@ index 622eceb4e5c8ad28f63bc5095be846b7cebb20ff..7447c5fecc0a47be763a2cc0e5338b2d
      readonly instructions: string;
      readonly reference?: string;
 diff --git a/src/loop/core.ts b/src/loop/core.ts
-index c103051f2415d3a51aacf72cc46b354adb7c16f4..d9e433bc65764e040c1ded78dcfdca456c31ee43 100644
+index c103051..d9e433b 100644
 --- a/src/loop/core.ts
 +++ b/src/loop/core.ts
 @@ -30,7 +30,7 @@ import { applyImageRescalePass, executeReadOriginalImage } from "../image-rescal
@@ -892,7 +894,7 @@ index c103051f2415d3a51aacf72cc46b354adb7c16f4..d9e433bc65764e040c1ded78dcfdca45
      const input = typeof rawArguments === "string" && rawArguments.length > 0 ? rawArguments : args;
      return applyConfiguredCompression(input, ctx, callId, signal);
 diff --git a/src/persist.ts b/src/persist.ts
-index 10be0e6c823ef4b29a0b094166f95bc047a201e8..eb3564a087980d3f384cb6aadd17c80c95639905 100644
+index 10be0e6..eb3564a 100644
 --- a/src/persist.ts
 +++ b/src/persist.ts
 @@ -1893,6 +1893,19 @@ export class SessionStore {
@@ -934,7 +936,7 @@ index 10be0e6c823ef4b29a0b094166f95bc047a201e8..eb3564a087980d3f384cb6aadd17c80c
      const store = peekStoreForStamp();
      if (!store) return null;
 diff --git a/src/plugin.ts b/src/plugin.ts
-index ec497fbd87e9cd713481286b438528e4f05aaf54..4f764e9d87ebd45e7afe6ef979d779152ee6f54d 100644
+index ec497fb..4f764e9 100644
 --- a/src/plugin.ts
 +++ b/src/plugin.ts
 @@ -1887,9 +1887,9 @@ export async function handlePluginTool(
@@ -958,7 +960,7 @@ index ec497fbd87e9cd713481286b438528e4f05aaf54..4f764e9d87ebd45e7afe6ef979d77915
                  // #833: run proxy tools under the session's last resolved Config
                  // (same values the wire path used), not the base kernelConfig.
 diff --git a/src/preflight.ts b/src/preflight.ts
-index 0af1155dd3e48b5378fa92f2ddd7fdc636979e21..00b9120a1480eb5b56bec936dbd860b075f6ac8d 100644
+index 0af1155..00b9120 100644
 --- a/src/preflight.ts
 +++ b/src/preflight.ts
 @@ -1,3 +1,4 @@
@@ -1166,7 +1168,7 @@ index 0af1155dd3e48b5378fa92f2ddd7fdc636979e21..00b9120a1480eb5b56bec936dbd860b0
                                      deps.log("warn", `[preflight] range ${skipKey}: assembled summary ${candidate.length} chars exceeded maxSummaryLength (${maxSummary}); truncated to ${rescued.length} chars`);
 diff --git a/src/search-cache.ts b/src/search-cache.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..b0d8d53c221fc1be72685dfeb33b11644f20d0ea
+index 0000000..b0d8d53
 --- /dev/null
 +++ b/src/search-cache.ts
 @@ -0,0 +1,25 @@
@@ -1197,10 +1199,10 @@ index 0000000000000000000000000000000000000000..b0d8d53c221fc1be72685dfeb33b1164
 +}
 diff --git a/src/search-evidence.ts b/src/search-evidence.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..68798c22128aae56e259d94f1377c87954ba09d1
+index 0000000..a2e2d26
 --- /dev/null
 +++ b/src/search-evidence.ts
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,258 @@
 +import type { CoreMessage, MessageContentStore } from "acp-kernel";
 +import { parseStoredPlaceholder } from "acp-kernel";
 +import type { BiliMessage } from "acp-kernel/wire";
@@ -1218,7 +1220,10 @@ index 0000000000000000000000000000000000000000..68798c22128aae56e259d94f1377c879
 +const preparedCache = new SearchLru<string, PreparedText & { source: string; attachment: string; sessionId: string }>();
 +const sessionKeys = new WeakMap<object, number>();
 +let sessionSequence = 0, preparedHits = 0, preparedMisses = 0;
-+function prepareText(session: Session, key: string, source: string, attachment = ""): PreparedText {
++function prepareText(session: Session, key: string, source: string, attachment = "", cache = true): PreparedText {
++    // One-shot private replay material must not outlive its caller in this
++    // process-wide cache. Keep exactly the same redaction and evidence IDs.
++    if (!cache) return prepareSearchText(session.id, key, source, attachment);
 +    let owner = sessionKeys.get(session);
 +    if (owner === undefined) { owner = ++sessionSequence; sessionKeys.set(session, owner); }
 +    const cacheKey = owner + "/" + key, prior = preparedCache.get(cacheKey);
@@ -1361,7 +1366,8 @@ index 0000000000000000000000000000000000000000..68798c22128aae56e259d94f1377c879
 +}
 +
 +/** Original-message recall is current-session only. Foreign-session delegation retains summary-only semantics. */
-+export function searchEvidence(session: Session, query: string, limit: number, view: CoreMessage[], persisted: SearchTranscriptRow[], store?: MessageContentStore, observe?: (id: string, text: string) => void): string {
++export function searchEvidence(session: Session, query: string, limit: number, view: CoreMessage[], persisted: SearchTranscriptRow[], store?: MessageContentStore, observe?: (id: string, text: string) => void, options: { cache?: boolean } = {}): string {
++    const prepare = (key: string, source: string, attachment = "") => prepareText(session, key, source, attachment, options.cache !== false);
 +    const read = /^open:(ev-[a-f0-9]{24})(?::(\d{1,12}))?$/.exec(query.trim());
 +    const scoped = /^block:(b\d+)\s+(.+)$/is.exec(query);
 +    const searchText=(scoped?.[2]??query).trim().toLowerCase();
@@ -1391,7 +1397,7 @@ index 0000000000000000000000000000000000000000..68798c22128aae56e259d94f1377c879
 +    for(const m of messages.values()){
 +        const ref=refs[m.id], stored=ref && store?.byRef[ref];
 +        const original=stored && stored.rawId===m.id ? store?.byHash[stored.hash]:undefined;
-+        const prepared=prepareText(session,m.id,original??m.text??"",m.attachment??"");
++        const prepared=prepare(m.id,original??m.text??"",m.attachment??"");
 +        if(!prepared.text) continue;
 +        notes.push({...prepared,key:m.id,ref:ref?.startsWith("m")?ref:undefined,block:coverage.get(m.id),retrieve:original!==undefined,label:metadata(m),corrects:typeof m.corrects==="string"?m.corrects:undefined});
 +    }
@@ -1399,7 +1405,7 @@ index 0000000000000000000000000000000000000000..68798c22128aae56e259d94f1377c879
 +    for(const block of session.state.blocks){
 +        if(block.active)continue; // active summaries already have their own ranked section
 +        const key="summary/"+block.blockId;
-+        notes.push({...prepareText(session,key,[block.topic,block.summary].filter(Boolean).join("\n")),key,label:"historical inactive summary; block time="+block.createdAt,block:block.blockId});
++        notes.push({...prepare(key,[block.topic,block.summary].filter(Boolean).join("\n")),key,label:"historical inactive summary; block time="+block.createdAt,block:block.blockId});
 +    }
 +    const identity=(n: Note)=>n.evidence;
 +    const cite=(n:Note)=>`${clean(n.key).slice(0,160)}${n.ref?" "+n.ref:""}${n.block?" "+n.block:""} ${n.label}`;
@@ -1445,7 +1451,7 @@ index 0000000000000000000000000000000000000000..68798c22128aae56e259d94f1377c879
 +        if(!b.effectiveMessageIds.some(id=>!messages.has(id)))continue;
 +        const view=session.blockContents.get(b.blockId)?.full;
 +        if(!view?.text)continue;
-+        const searchable=prepareText(session,"archive/"+b.blockId,view.text).lower;
++        const searchable=prepare("archive/"+b.blockId,view.text).lower;
 +        if(!terms.every(t=>searchable.includes(t)))continue;
 +        if(legacy++>=Math.min(3,limit))break;
 +        const ids=new Set(b.effectiveMessageIds);
@@ -1457,7 +1463,7 @@ index 0000000000000000000000000000000000000000..68798c22128aae56e259d94f1377c879
 +}
 diff --git a/src/search-text.ts b/src/search-text.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..76e3a0a2057477568f8bfedbfd319ad0f9ae7552
+index 0000000..76e3a0a
 --- /dev/null
 +++ b/src/search-text.ts
 @@ -0,0 +1,12 @@
@@ -1474,7 +1480,7 @@ index 0000000000000000000000000000000000000000..76e3a0a2057477568f8bfedbfd319ad0
 +    return { text, lower: text.toLowerCase(), evidence: "ev-" + createHash("sha256").update(sessionId + "\0" + key + "\0" + text).digest("hex").slice(0, 24) };
 +}
 diff --git a/src/server.ts b/src/server.ts
-index ccea8cf4283cbfbe89a426b8be096fda2b3b768a..0f92a1083c24b4d8635c0bf719352ca4eea4d00e 100644
+index ccea8cf..0f92a10 100644
 --- a/src/server.ts
 +++ b/src/server.ts
 @@ -1,3 +1,5 @@
@@ -1549,7 +1555,7 @@ index ccea8cf4283cbfbe89a426b8be096fda2b3b768a..0f92a1083c24b4d8635c0bf719352ca4
              // less than its fixed cost — same economics as a zero-progress pass,
              // so arm the same cooldown instead of paying per-request for
 diff --git a/src/session.ts b/src/session.ts
-index d1083ee4d7663fe4f8105737dfe5d61b393fc043..5023fd9601951e1e03e277010331abb6e8a67619 100644
+index d1083ee..5023fd9 100644
 --- a/src/session.ts
 +++ b/src/session.ts
 @@ -1404,9 +1404,11 @@ export function snapshotMessages(session: Session, messages: CoreMessage[]): voi
@@ -1567,20 +1573,24 @@ index d1083ee4d7663fe4f8105737dfe5d61b393fc043..5023fd9601951e1e03e277010331abb6
  /** Record original block content at compress time. */
 diff --git a/src/storage/search-index-client.ts b/src/storage/search-index-client.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..919dc646468b97bb309567deac94511c3a3d62d7
+index 0000000..aa1b902
 --- /dev/null
 +++ b/src/storage/search-index-client.ts
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,201 @@
 +import { existsSync } from "node:fs";
 +import { createRequire } from "node:module";
 +import { Worker } from "node:worker_threads";
 +import { pathToFileURL } from "node:url";
-+import type { SearchIndexOptions, SearchIndexResult } from "./search-index-types.js";
++import type { SearchIndexOptions, SearchIndexProgress, SearchIndexResult } from "./search-index-types.js";
 +import { log as loggerLog } from "../logger.js";
 +
 +type TransferRow = NonNullable<SearchIndexOptions["overlays"]>[number] | NonNullable<SearchIndexOptions["summaries"]>[number] | NonNullable<SearchIndexOptions["archives"]>[number];
 +type TransferState = { overlays: Map<string, TransferRow>; summaries: Map<string, TransferRow>; archives: Map<string, TransferRow>; estimatedBytes: number };
 +const transferBudgetBytes = 64 * 1024 * 1024;
++interface SearchIndexClientRuntime {
++    inactivityTimeoutMs?: number;
++    createWorker?: () => Worker;
++}
 +function estimateTransferBytes(row: TransferRow): number {
 +    let size = 256;
 +    for (const value of Object.values(row)) {
@@ -1626,20 +1636,38 @@ index 0000000000000000000000000000000000000000..919dc646468b97bb309567deac94511c
 +    private transferBytes = 0;
 +    private queues = new Map<string, Promise<void>>();
 +    private transferred = { overlayRows: 0, overlayChars: 0, summaryRows: 0, archiveRows: 0 };
-+    private pending = new Map<number, { sessionId: string; resolve: (value: SearchIndexResult | null) => void; timer: ReturnType<typeof setTimeout> }>();
-+    constructor(readonly path: string | null) {}
++    private pending = new Map<number, { sessionId: string; resolve: (value: SearchIndexResult | null) => void; timer: ReturnType<typeof setTimeout> | null; committed: number }>();
++    private readonly inactivityTimeoutMs: number;
++    constructor(readonly path: string | null, private readonly runtime: SearchIndexClientRuntime = {}) {
++        const timeout = runtime.inactivityTimeoutMs ?? 120_000;
++        if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 2_147_483_647) throw Error("Invalid search inactivity timeout");
++        this.inactivityTimeoutMs = timeout;
++    }
 +    /** Content-free transport counters, for long-history regression checks. */
 +    diagnostics() { return { ...this.transferred, residentSessions: this.transfers.size, residentEstimatedBytes: this.transferBytes, transferBudgetBytes }; }
 +    private forgetTransfer(sessionId: string) {
 +        this.transferBytes -= this.transfers.get(sessionId)?.estimatedBytes ?? 0;
 +        this.transfers.delete(sessionId);
 +    }
++    private armOldest() {
++        // The worker processes queries synchronously. Queued requests have not
++        // started and must not time out while another request makes progress.
++        const entry = this.pending.entries().next().value;
++        if (!entry) return;
++        const [id, request] = entry;
++        if (request.timer) clearTimeout(request.timer);
++        const worker = this.worker;
++        request.timer = setTimeout(() => {
++            if (this.worker === worker && this.pending.keys().next().value === id) void this.stop(false);
++        }, this.inactivityTimeoutMs);
++    }
 +    private start(): Worker {
 +        if (this.closed) throw Error("History index is closed");
 +        if (this.worker) return this.worker;
 +        const source = new URL("./search-index-worker.ts", import.meta.url);
 +        let worker: Worker;
-+        if (existsSync(source)) {
++        if (this.runtime.createWorker) worker = this.runtime.createWorker();
++        else if (existsSync(source)) {
 +            const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href;
 +            worker = new Worker(`const {workerData}=require('node:worker_threads'); import(workerData.loader).then(({register})=>{register();return import(workerData.entry)});`, {
 +                eval: true, workerData: { path: this.path, entry: source.href, loader }, execArgv: [],
@@ -1653,14 +1681,25 @@ index 0000000000000000000000000000000000000000..919dc646468b97bb309567deac94511c
 +        // A replacement worker has no overlay snapshot. Never send it a delta
 +        // which assumes that a previous crashed worker received the base.
 +        this.transfers.clear(); this.transferBytes = 0;
-+        worker.on("message", (message: { id: number; result?: SearchIndexResult; error?: string }) => {
++        worker.on("message", (message: { id: number; result?: SearchIndexResult; error?: string; progress?: SearchIndexProgress }) => {
 +            if (this.worker !== worker) return;
 +            const request = this.pending.get(message.id); if (!request) return;
++            if (message.progress) {
++                const committed = message.progress.committed;
++                // Only durable work advances the deadline. Heartbeats, repeated
++                // counters and messages for queued/previous workers do not.
++                if (this.pending.keys().next().value === message.id && Number.isSafeInteger(committed) && committed > request.committed) {
++                    request.committed = committed; this.armOldest();
++                }
++                return;
++            }
 +            if (message.error) loggerLog("warn", "[history-search] index query failed; original history retained; worker-error");
 +            // The worker may fail before applying a delta (for example while
 +            // opening a locked source). The next request must resend its base.
 +            if (message.error || !message.result) this.forgetTransfer(request.sessionId);
-+            clearTimeout(request.timer); this.pending.delete(message.id); request.resolve(message.result ?? null);
++            if (request.timer) clearTimeout(request.timer);
++            this.pending.delete(message.id); request.resolve(message.result ?? null);
++            this.armOldest();
 +            if (!this.pending.size) worker.unref();
 +        });
 +        const fail = () => {
@@ -1668,7 +1707,7 @@ index 0000000000000000000000000000000000000000..919dc646468b97bb309567deac94511c
 +            loggerLog("warn", "[history-search] worker stopped before completing queries; original history retained");
 +            if (this.worker === worker) this.worker = null;
 +            this.transfers.clear(); this.transferBytes = 0;
-+            for (const request of this.pending.values()) { clearTimeout(request.timer); request.resolve(null); }
++            for (const request of this.pending.values()) { if (request.timer) clearTimeout(request.timer); request.resolve(null); }
 +            this.pending.clear();
 +        };
 +        worker.on("error", fail); worker.on("exit", fail); worker.unref();
@@ -1718,8 +1757,8 @@ index 0000000000000000000000000000000000000000..919dc646468b97bb309567deac94511c
 +        this.transferred.archiveRows += archive.changed.length;
 +        return new Promise(resolve => {
 +            const id = ++this.sequence;
-+            const timer = setTimeout(() => { void this.stop(false); }, 120_000);
-+            this.pending.set(id, { sessionId, resolve, timer }); worker.ref();
++            this.pending.set(id, { sessionId, resolve, timer: null, committed: 0 }); worker.ref();
++            if (this.pending.size === 1) this.armOldest();
 +            try { worker.postMessage({ id, sessionId, query, limit, options: transferred }); } catch { void this.stop(false); }
 +        });
 +    }
@@ -1727,7 +1766,7 @@ index 0000000000000000000000000000000000000000..919dc646468b97bb309567deac94511c
 +        if (final) this.closed = true;
 +        const worker = this.worker; this.worker = null;
 +        this.transfers.clear(); this.transferBytes = 0;
-+        for (const request of this.pending.values()) { clearTimeout(request.timer); request.resolve(null); }
++        for (const request of this.pending.values()) { if (request.timer) clearTimeout(request.timer); request.resolve(null); }
 +        this.pending.clear();
 +        if (worker) await worker.terminate();
 +    }
@@ -1741,19 +1780,20 @@ index 0000000000000000000000000000000000000000..919dc646468b97bb309567deac94511c
 +}
 diff --git a/src/storage/search-index-engine.ts b/src/storage/search-index-engine.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ce11ed3e752efa300539953d6dbe9d659f59eec9
+index 0000000..4a6300c
 --- /dev/null
 +++ b/src/storage/search-index-engine.ts
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,381 @@
 +import { DatabaseSync } from "node:sqlite";
 +import { renameSync } from "node:fs";
 +import { safePrefix } from "../text-safe.js";
 +import { cleanSearchText, prepareSearchText } from "../search-text.js";
-+import type { SearchIndexOptions, SearchIndexResult, SearchIndexRow } from "./search-index-types.js";
++import type { SearchIndexOptions, SearchIndexProgress, SearchIndexResult, SearchIndexRow } from "./search-index-types.js";
 +import type { SearchTranscriptRow } from "./store.js";
 +
 +const batchSize = 250;
 +const indexVersion = "redacted-grams-v2";
++const completedRevision = Number.MAX_SAFE_INTEGER;
 +const stringValue = (value: unknown) => typeof value === "string" ? value : "";
 +const objectValue = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 +const eligible = (row: SearchTranscriptRow) => !!row.id && row.contentType !== "reasoning" && ["user", "assistant", "tool"].includes(row.role) && !row.id.startsWith("acp_summary_");
@@ -1813,6 +1853,17 @@ index 0000000000000000000000000000000000000000..ce11ed3e752efa300539953d6dbe9d65
 +CREATE INDEX IF NOT EXISTS docs_correction ON docs(session_id,corrects);`);
 +        try {
 +            this.index.exec("BEGIN IMMEDIATE");
++            const columns = this.index.prepare("PRAGMA table_info(sessions)").all() as { name: string }[];
++            const missingRevision = !columns.some(column => column.name === "dirty_revision");
++            const missingSequence = !columns.some(column => column.name === "dirty_seq");
++            if (missingRevision) this.index.exec("ALTER TABLE sessions ADD COLUMN dirty_revision INTEGER NOT NULL DEFAULT 0");
++            if (missingSequence) this.index.exec("ALTER TABLE sessions ADD COLUMN dirty_seq INTEGER NOT NULL DEFAULT -1");
++            if (missingRevision || missingSequence) {
++                // Legacy ready rows were committed with their complete source
++                // revision. Reuse that index; only incomplete bootstrap rows
++                // must conservatively replay the journal from its beginning.
++                this.index.prepare("UPDATE sessions SET dirty_revision=revision,dirty_seq=? WHERE ready=1").run(completedRevision);
++            }
 +            const triggerCount = Number((this.index.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='trigger' AND name IN ('docs_ai','docs_ad','docs_au')").get() as { n: number }).n);
 +            const previousMode = (this.index.prepare("SELECT generation FROM meta WHERE id=1").get() as { generation: string } | undefined)?.generation ?? "";
 +            const repairing = triggerCount !== 3 || previousMode.includes(":scan:");
@@ -1881,61 +1932,95 @@ index 0000000000000000000000000000000000000000..ce11ed3e752efa300539953d6dbe9d65
 +            this.index.prepare("INSERT INTO short(rowid,shorts) VALUES(?,?)").run(stored.rowid, shortGrams(prepared.lower));
 +        }
 +    }
-+    private sync(sessionId: string): { revision: number; indexed: number } {
-+        if (!this.source) return { revision: 0, indexed: 0 };
-+        const rawGeneration = (this.source.prepare("SELECT generation FROM search_index_meta WHERE id=1").get() as { generation: string } | undefined)?.generation;
-+        if (!rawGeneration) throw Error("History index change journal is unavailable");
-+        const generation = indexVersion + (this.fts ? ":fts:" : ":scan:") + rawGeneration;
-+        const prior = (this.index.prepare("SELECT generation FROM meta WHERE id=1").get() as { generation: string } | undefined)?.generation;
-+        if (generation !== prior) this.transaction(() => {
-+            this.index.exec("DELETE FROM docs; DELETE FROM sessions;");
-+            this.index.prepare("INSERT INTO meta VALUES(1,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation").run(generation);
-+        });
-+        const revision = Number((this.source.prepare("SELECT revision FROM search_index_versions WHERE session_id=?").get(sessionId) as { revision: number } | undefined)?.revision ?? 0);
-+        let state = this.index.prepare("SELECT cursor,ready,revision FROM sessions WHERE session_id=?").get(sessionId) as { cursor: number; ready: number; revision: number } | undefined;
-+        if (state?.ready && state.revision === revision) return { revision, indexed: 0 };
-+        if (!state) {
-+            this.index.prepare("INSERT INTO sessions(session_id) VALUES(?)").run(sessionId);
-+            state = { cursor: -1, ready: 0, revision: 0 };
-+        }
-+        let indexed = 0;
-+        if (!state.ready) {
-+            while (true) {
-+                const rows = this.source.prepare("SELECT seq FROM messages WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?").all(sessionId, state.cursor, batchSize) as { seq: number }[];
-+                if (!rows.length) break;
-+                this.transaction(() => {
-+                    for (const row of rows) { this.put(sessionId, row.seq); indexed++; }
-+                    state!.cursor = rows.at(-1)!.seq;
-+                    this.index.prepare("UPDATE sessions SET cursor=? WHERE session_id=?").run(state!.cursor, sessionId);
-+                });
-+            }
-+        }
-+        // Each canonical row has at most one dirty slot. A deleted row remains a
-+        // tombstone, so restart and cross-connection changes cannot resurrect it.
-+        const dirty = this.source.prepare("SELECT seq FROM search_index_dirty WHERE session_id=? AND revision>? AND revision<=? ORDER BY revision,seq").all(sessionId, state.revision, revision) as { seq: number }[];
-+        for (let i = 0; i < dirty.length; i += batchSize) this.transaction(() => {
-+            for (const row of dirty.slice(i, i + batchSize)) { this.put(sessionId, row.seq); indexed++; }
-+        });
-+        this.index.prepare("UPDATE sessions SET ready=1,revision=? WHERE session_id=?").run(revision, sessionId);
-+        return { revision, indexed };
-+    }
-+    query(sessionId: string, query: string, limit: number, options: SearchIndexOptions = {}): SearchIndexResult {
-+        if (this.closed) throw Error("History search worker is closed");
-+        const started = performance.now();
-+        this.changedIds.clear();
-+        // One read snapshot covers version, source projection, index sync and
-+        // selected evidence. Concurrent updates belong to the next search.
++    /** Always acquire the sidecar writer before the fresh source snapshot. A
++     * different process may finish a newer index between batches; reading its
++     * checkpoint under this lock prevents an older source view overwriting it. */
++    private snapshot<T>(work: () => T): T {
 +        return this.transaction(() => {
-+            // Serialize only this disposable sidecar's writers before opening the
-+            // source snapshot. Other processes cannot advance the index past our
-+            // snapshot or rewrite candidates between synchronization and ranking.
 +            this.source?.exec("BEGIN");
-+            try { return this.querySnapshot(sessionId, query, limit, options, started); }
++            try { return work(); }
 +            finally { this.source?.exec("ROLLBACK"); }
 +        });
 +    }
-+    private querySnapshot(sessionId: string, query: string, limit: number, options: SearchIndexOptions, started: number): SearchIndexResult {
-+        const { revision, indexed } = this.sync(sessionId);
++    private sourceVersion(sessionId: string): { generation: string; revision: number } {
++        const raw = (this.source!.prepare("SELECT generation FROM search_index_meta WHERE id=1").get() as { generation: string } | undefined)?.generation;
++        if (!raw) throw Error("History index change journal is unavailable");
++        const revision = Number((this.source!.prepare("SELECT revision FROM search_index_versions WHERE session_id=?").get(sessionId) as { revision: number } | undefined)?.revision ?? 0);
++        return { generation: indexVersion + (this.fts ? ":fts:" : ":scan:") + raw, revision };
++    }
++    /** One real COMMIT per bounded batch, including its restart checkpoint.
++     * Never call from the ranking transaction: SAVEPOINTs do not survive a
++     * killed worker. Dirty ordering has two fields because one source revision
++     * can change more than a batch of messages sharing the same content. */
++    private syncBatch(sessionId: string): { done: boolean; indexed: number } {
++        if (!this.source) return { done: true, indexed: 0 };
++        return this.snapshot(() => {
++            const { generation, revision } = this.sourceVersion(sessionId);
++            const prior = (this.index.prepare("SELECT generation FROM meta WHERE id=1").get() as { generation: string } | undefined)?.generation;
++            if (generation !== prior) {
++                for (const cached of this.overlaySessions.values()) for (const id of cached.canonical) this.changedIds.add(id);
++                this.index.exec("DELETE FROM docs; DELETE FROM sessions;");
++                this.index.prepare("INSERT INTO meta VALUES(1,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation").run(generation);
++            }
++            let state = this.index.prepare("SELECT cursor,ready,revision,dirty_revision,dirty_seq FROM sessions WHERE session_id=?").get(sessionId) as { cursor: number; ready: number; revision: number; dirty_revision: number; dirty_seq: number } | undefined;
++            if (state?.ready && state.revision === revision) return { done: true, indexed: 0 };
++            if (!state) {
++                // The initial scan sees this baseline. Subsequent edits to its
++                // already-scanned prefix are replayed from the durable journal.
++                this.index.prepare("INSERT INTO sessions(session_id,revision,dirty_revision,dirty_seq) VALUES(?,?,?,?)").run(sessionId, revision, revision, completedRevision);
++                state = { cursor: -1, ready: 0, revision, dirty_revision: revision, dirty_seq: completedRevision };
++            }
++            if (!state.ready) {
++                const rows = this.source!.prepare("SELECT seq FROM messages WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?").all(sessionId, state.cursor, batchSize) as { seq: number }[];
++                if (rows.length) {
++                    for (const row of rows) this.put(sessionId, row.seq);
++                    this.index.prepare("UPDATE sessions SET cursor=? WHERE session_id=?").run(rows.at(-1)!.seq, sessionId);
++                    return { done: false, indexed: rows.length };
++                }
++                this.index.prepare("UPDATE sessions SET ready=1 WHERE session_id=?").run(sessionId);
++            }
++            const dirty = this.source!.prepare(`SELECT seq,revision FROM search_index_dirty WHERE session_id=?
++ AND (revision>? OR (revision=? AND seq>?)) AND revision<=? ORDER BY revision,seq LIMIT ?`)
++                .all(sessionId, state.dirty_revision, state.dirty_revision, state.dirty_seq, revision, batchSize) as { seq: number; revision: number }[];
++            if (dirty.length) {
++                for (const row of dirty) this.put(sessionId, row.seq);
++                const last = dirty.at(-1)!;
++                this.index.prepare("UPDATE sessions SET dirty_revision=?,dirty_seq=? WHERE session_id=?").run(last.revision, last.seq, sessionId);
++                return { done: false, indexed: dirty.length };
++            }
++            this.index.prepare("UPDATE sessions SET ready=1,revision=?,dirty_revision=?,dirty_seq=? WHERE session_id=?").run(revision, revision, completedRevision, sessionId);
++            return { done: true, indexed: 0 };
++        });
++    }
++    query(sessionId: string, query: string, limit: number, options: SearchIndexOptions = {}, onProgress?: (progress: SearchIndexProgress) => void): SearchIndexResult {
++        if (this.closed) throw Error("History search worker is closed");
++        const started = performance.now();
++        this.changedIds.clear();
++        let indexed = 0;
++        for (;;) {
++            const batch = this.syncBatch(sessionId);
++            indexed += batch.indexed;
++            // This runs only after the enclosing COMMIT, never a savepoint or
++            // projection. Terminating here retains rows and their cursor.
++            if (batch.indexed) onProgress?.({ committed: indexed });
++            if (!batch.done) continue;
++            const result = this.snapshot(() => {
++                let revision = 0;
++                if (this.source) {
++                    const version = this.sourceVersion(sessionId);
++                    const generation = (this.index.prepare("SELECT generation FROM meta WHERE id=1").get() as { generation: string } | undefined)?.generation;
++                    const state = this.index.prepare("SELECT ready,revision FROM sessions WHERE session_id=?").get(sessionId) as { ready: number; revision: number } | undefined;
++                    // Source writes may have arrived while no lock was held.
++                    // Do more durable batches rather than returning false misses.
++                    if (generation !== version.generation || !state?.ready || state.revision !== version.revision) return null;
++                    revision = version.revision;
++                }
++                return this.querySnapshot(sessionId, query, limit, options, started, revision, indexed);
++            });
++            if (result) return result;
++        }
++    }
++    private querySnapshot(sessionId: string, query: string, limit: number, options: SearchIndexOptions, started: number, revision: number, indexed: number): SearchIndexResult {
 +        limit = Math.min(12, Math.max(1, Math.floor(limit) || 5));
 +        const scoped = /^block:(b\d+)\s+(.+)$/is.exec(query);
 +        const text = (scoped?.[2] ?? query).trim().toLowerCase();
@@ -2082,7 +2167,7 @@ index 0000000000000000000000000000000000000000..ce11ed3e752efa300539953d6dbe9d65
 +}
 diff --git a/src/storage/search-index-journal.ts b/src/storage/search-index-journal.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..22d9817a342589a62de69eee15001677c704e8c6
+index 0000000..22d9817
 --- /dev/null
 +++ b/src/storage/search-index-journal.ts
 @@ -0,0 +1,53 @@
@@ -2141,15 +2226,19 @@ index 0000000000000000000000000000000000000000..22d9817a342589a62de69eee15001677
 +}
 diff --git a/src/storage/search-index-types.ts b/src/storage/search-index-types.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..76d5ae5d677eb047c693344234b8287220ca6dbb
+index 0000000..f73c56e
 --- /dev/null
 +++ b/src/storage/search-index-types.ts
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,42 @@
 +import type { SearchTranscriptRow } from "./store.js";
 +
 +export interface SearchIndexRow extends SearchTranscriptRow {
 +    seq: number;
 +    prepared?: { text: string; evidence: string; totalChars: number; offset: number; matchAt?: number };
++}
++export interface SearchIndexProgress {
++    /** Per-request monotonic source/checkpoint work, reported after commit. */
++    committed: number;
 +}
 +export interface SearchIndexOptions {
 +    overlays?: SearchTranscriptRow[];
@@ -2185,23 +2274,24 @@ index 0000000000000000000000000000000000000000..76d5ae5d677eb047c693344234b82872
 +}
 diff --git a/src/storage/search-index-worker.ts b/src/storage/search-index-worker.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..06304a121a3e8f35daf6a55f1f022f0f5ca4cd60
+index 0000000..8cc7e32
 --- /dev/null
 +++ b/src/storage/search-index-worker.ts
-@@ -0,0 +1,10 @@
+@@ -0,0 +1,11 @@
 +import { parentPort, workerData } from "node:worker_threads";
 +import { SearchIndexEngine } from "./search-index-engine.js";
 +import type { SearchIndexOptions } from "./search-index-types.js";
 +
 +const engine = new SearchIndexEngine(workerData.path ?? null);
 +parentPort!.on("message", (request: { id: number; sessionId: string; query: string; limit: number; options?: SearchIndexOptions }) => {
-+    try { parentPort!.postMessage({ id: request.id, result: engine.query(request.sessionId, request.query, request.limit, request.options) }); }
++    try { parentPort!.postMessage({ id: request.id, result: engine.query(request.sessionId, request.query, request.limit, request.options,
++        progress => parentPort!.postMessage({ id: request.id, progress })) }); }
 +    catch { parentPort!.postMessage({ id: request.id, error: "History search index unavailable; retry or rebuild the derived index" }); }
 +});
 +parentPort!.on("close", () => engine.close());
 diff --git a/src/storage/search-transcript-cache.ts b/src/storage/search-transcript-cache.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..5cdfc7ef5a8707e4d1d1d9552fa99a4a59494a35
+index 0000000..5cdfc7e
 --- /dev/null
 +++ b/src/storage/search-transcript-cache.ts
 @@ -0,0 +1,65 @@
@@ -2271,7 +2361,7 @@ index 0000000000000000000000000000000000000000..5cdfc7ef5a8707e4d1d1d9552fa99a4a
 +    stats() { return { ...this.cache.stats(), hits: this.hits, loads: this.loads }; }
 +}
 diff --git a/src/storage/shadow.ts b/src/storage/shadow.ts
-index aec7da44eb14d223d916d72c909411b309dd1586..f1f5c9ae600a55a5c55c21c50d52c3e1e71a7d1f 100644
+index aec7da4..f1f5c9a 100644
 --- a/src/storage/shadow.ts
 +++ b/src/storage/shadow.ts
 @@ -769,6 +769,18 @@ export class UnifiedShadow {
@@ -2294,7 +2384,7 @@ index aec7da44eb14d223d916d72c909411b309dd1586..f1f5c9ae600a55a5c55c21c50d52c3e1
          if (this.sync === null) return [];
          this.assertLive();
 diff --git a/src/storage/store.ts b/src/storage/store.ts
-index 0cab41538d5f0fdc495006c015d36c85e99f50af..d14dbd4a0cb9291c77413bcb5443392c7b233b3e 100644
+index 0cab415..d14dbd4 100644
 --- a/src/storage/store.ts
 +++ b/src/storage/store.ts
 @@ -27,6 +27,10 @@ import { recordIntegrityOutcome, recordSecondProcessOwner, recordBackupOutcome }
@@ -2388,7 +2478,7 @@ index 0cab41538d5f0fdc495006c015d36c85e99f50af..d14dbd4a0cb9291c77413bcb5443392c
          if (refNums.length === 0) return [];
          const nums = [...new Set(refNums)];
 diff --git a/src/stream.ts b/src/stream.ts
-index f32641fc9bc393e6aabaf8b087b630908a789f39..f8025ddeb13315853339bd5778eb67f6991378ff 100644
+index f32641f..f8025dd 100644
 --- a/src/stream.ts
 +++ b/src/stream.ts
 @@ -5,7 +5,7 @@ import { handleAcpCache, prefixTokensBeforeRef, recordCacheFoldsFromBlocks } fro
@@ -2417,7 +2507,7 @@ index f32641fc9bc393e6aabaf8b087b630908a789f39..f8025ddeb13315853339bd5778eb67f6
  }
  
 diff --git a/src/thirdparty-scan.ts b/src/thirdparty-scan.ts
-index 6fc46fce44c542d4b24f6d8bb97a3e5113d52f01..57e0c306735c247331942d58afdf59dd63628cdd 100644
+index 6fc46fc..57e0c30 100644
 --- a/src/thirdparty-scan.ts
 +++ b/src/thirdparty-scan.ts
 @@ -202,6 +202,8 @@ export function isOpencodeAcpEntry(entry: string): boolean {
@@ -2430,7 +2520,7 @@ index 6fc46fce44c542d4b24f6d8bb97a3e5113d52f01..57e0c306735c247331942d58afdf59dd
      // registers display toggles; README states "changes display only" — no context
      // replacement or compression handler (#2324).
 diff --git a/tests/check-dist-external.test.ts b/tests/check-dist-external.test.ts
-index 60a06a6285427c85b753a7991659825fee11209b..d18986eabc7ef3c03c5f8c3b633e5e38291a5db7 100644
+index 60a06a6..d18986e 100644
 --- a/tests/check-dist-external.test.ts
 +++ b/tests/check-dist-external.test.ts
 @@ -60,6 +60,11 @@ test("node builtins (with and without node: prefix) are clean", () => {
@@ -2447,7 +2537,7 @@ index 60a06a6285427c85b753a7991659825fee11209b..d18986eabc7ef3c03c5f8c3b633e5e38
          'import{a}from"left-pad";',
 diff --git a/tests/collaborative-transaction.test.ts b/tests/collaborative-transaction.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..67046fc84630a5ebcd26a8cc34658d3eee44df06
+index 0000000..67046fc
 --- /dev/null
 +++ b/tests/collaborative-transaction.test.ts
 @@ -0,0 +1,282 @@
@@ -2734,7 +2824,7 @@ index 0000000000000000000000000000000000000000..67046fc84630a5ebcd26a8cc34658d3e
 + },()=>false,()=>{plans++;return {decision:"wait",ranges:[],reason:"not yet"};});
 +});
 diff --git a/tests/dsh-native.test.ts b/tests/dsh-native.test.ts
-index d1c76b43ee1e0a62dc74663ca86c887d16357081..e087408bf75a13421bff38ce5f8f341c32af39e5 100644
+index d1c76b4..e087408 100644
 --- a/tests/dsh-native.test.ts
 +++ b/tests/dsh-native.test.ts
 @@ -526,8 +526,8 @@ function mockBiliHandler(toolCalls: Array<{ conversationId: string; tool: string
@@ -2786,7 +2876,7 @@ index d1c76b43ee1e0a62dc74663ca86c887d16357081..e087408bf75a13421bff38ce5f8f341c
 + });}finally{proxy.close();_resetRegisterForTest(undefined);rmrf(home);}
 +});
 diff --git a/tests/search-context-cross-session.test.ts b/tests/search-context-cross-session.test.ts
-index 2e8f71de9315c17d26133c306faa2f13b3bf967f..025ea371961145682555fe35fa405510958f7a57 100644
+index 2e8f71d..025ea37 100644
 --- a/tests/search-context-cross-session.test.ts
 +++ b/tests/search-context-cross-session.test.ts
 @@ -187,13 +187,15 @@ test("#841 resident historical session served from memory without disk", () => {
@@ -2818,10 +2908,10 @@ index 2e8f71de9315c17d26133c306faa2f13b3bf967f..025ea371961145682555fe35fa405510
  });
 diff --git a/tests/search-evidence-cache.test.ts b/tests/search-evidence-cache.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..f451de856cc7c6930180a45e5348231b6c0d78f3
+index 0000000..c7372cc
 --- /dev/null
 +++ b/tests/search-evidence-cache.test.ts
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,91 @@
 +import test from "node:test";
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
@@ -2901,9 +2991,21 @@ index 0000000000000000000000000000000000000000..f451de856cc7c6930180a45e5348231b
 + cache.set("a","too large",71);assert.equal(cache.get("a"),undefined);assert.deepEqual(cache.stats(),{entries:1,bytes:30});
 + cache.clear();assert.deepEqual(cache.stats(),{entries:0,bytes:0});
 +});
++
++test("one-shot replay searches and evidence expansion do not retain private excerpts in the global cache",()=>{
++ const messages:CoreMessage[]=[{id:"private-once",role:"user",contentType:"text",text:"PRIVATE-REPLAY marker 岑舒 " + "原文".repeat(1200)}];
++ const session={id:"isolated-replay:cache-regression",state:createInitialState(),blockContents:new Map(),lastMessages:messages} as unknown as Session;
++ const before=searchEvidenceCacheStats();
++ const query=(text:string)=>searchEvidence(session,text,3,messages,[],undefined,undefined,{cache:false});
++ const result=query("岑舒"),handle=result.match(/read: (open:ev-[a-f0-9]+:\d+)/)![1]!;
++ assert.match(result,/PRIVATE-REPLAY/);assert.match(query(handle),/PRIVATE-REPLAY/);
++ assert.deepEqual(searchEvidenceCacheStats(),before,"no private source or normalized copy retained");
++ messages.length=0;assert.match(query(handle),/unavailable or changed/);
++ assert.deepEqual(searchEvidenceCacheStats(),before);
++});
 diff --git a/tests/search-fts-acceptance.test.ts b/tests/search-fts-acceptance.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..3899255e1f6091bfc59be660fd7c71df15cd87c1
+index 0000000..3899255
 --- /dev/null
 +++ b/tests/search-fts-acceptance.test.ts
 @@ -0,0 +1,69 @@
@@ -2978,7 +3080,7 @@ index 0000000000000000000000000000000000000000..3899255e1f6091bfc59be660fd7c71df
 +});
 diff --git a/tests/search-index-dist.test.ts b/tests/search-index-dist.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..1d33d900a1dc0d779bc58684f150252727b1f100
+index 0000000..1d33d90
 --- /dev/null
 +++ b/tests/search-index-dist.test.ts
 @@ -0,0 +1,81 @@
@@ -3065,7 +3167,7 @@ index 0000000000000000000000000000000000000000..1d33d900a1dc0d779bc58684f1502527
 +});
 diff --git a/tests/search-index-integration.test.ts b/tests/search-index-integration.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ad03ea856086e0676b97917b2913c1245f1473d8
+index 0000000..ad03ea8
 --- /dev/null
 +++ b/tests/search-index-integration.test.ts
 @@ -0,0 +1,251 @@
@@ -3320,9 +3422,353 @@ index 0000000000000000000000000000000000000000..ad03ea856086e0676b97917b2913c124
 +        assert.equal(client.diagnostics().overlayRows, 18);
 +    } finally { await client.close(); }
 +});
+diff --git a/tests/search-index-progress.test.ts b/tests/search-index-progress.test.ts
+new file mode 100644
+index 0000000..d2cb211
+--- /dev/null
++++ b/tests/search-index-progress.test.ts
+@@ -0,0 +1,116 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { once } from "node:events";
++import { Worker } from "node:worker_threads";
++import { SearchIndexClient } from "../src/storage/search-index-client.js";
++
++const timeoutMs = 500;
++const intervalMs = 80;
++const workerSource = `
++const { parentPort, workerData } = require('node:worker_threads');
++const queue = [];
++let active = false;
++function next() {
++    if (active || !queue.length) return;
++    active = true;
++    const request = queue.shift();
++    let committed = 0;
++    const timer = setInterval(() => {
++        if (workerData.behavior === 'progress') {
++            parentPort.postMessage({ id: request.id, progress: { committed: ++committed } });
++        } else if (workerData.behavior === 'repeat') {
++            parentPort.postMessage({ id: request.id, progress: { committed: 1 } });
++        } else if (workerData.behavior === 'wrong-request') {
++            parentPort.postMessage({ id: request.id + 1, progress: { committed: ++committed } });
++            for (const invalid of [0, -1, NaN, Infinity, '100', 1.5]) {
++                parentPort.postMessage({ id: request.id, progress: { committed: invalid } });
++            }
++        }
++    }, workerData.intervalMs);
++    setTimeout(() => {
++        clearInterval(timer);
++        parentPort.postMessage({ id: request.id, result: {
++            rows: [], matchIds: [], neighbors: {}, corrections: {},
++            revision: 1, complete: true, mode: 'fts',
++            stats: { indexed: committed, loaded: 0, matched: 0, elapsedMs: workerData.durationMs }
++        } });
++        active = false;
++        next();
++    }, workerData.durationMs);
++}
++parentPort.on('message', request => { queue.push(request); next(); });
++parentPort.postMessage({ ready: true });
++`;
++
++async function readyWorker(behavior: string, durationMs = 1_500): Promise<Worker> {
++    const worker = new Worker(workerSource, { eval: true, execArgv: [], workerData: { behavior, durationMs, intervalMs } });
++    await once(worker, "message");
++    return worker;
++}
++
++test("committed progress allows indexing longer than the original total deadline", { timeout: 10_000 }, async t => {
++    const worker = await readyWorker("progress");
++    const client = new SearchIndexClient(null, { inactivityTimeoutMs: timeoutMs, createWorker: () => worker });
++    t.after(() => client.close());
++    const started = performance.now();
++    const result = await client.query("large-first-build", "青枔", 5);
++    assert.equal(result?.complete, true);
++    assert.ok(performance.now() - started > timeoutMs * 2, "query outlives its initial timeout while commits advance");
++    assert.ok((result?.stats.indexed ?? 0) >= 5);
++});
++
++test("queued sessions do not kill a preceding indexing query that is making progress", { timeout: 10_000 }, async t => {
++    const worker = await readyWorker("progress", 900);
++    const client = new SearchIndexClient(null, { inactivityTimeoutMs: timeoutMs, createWorker: () => worker });
++    t.after(() => client.close());
++    const results = await Promise.all([client.query("first", "青枔", 5), client.query("second", "岑舒", 5)]);
++    assert.deepEqual(results.map(result => result?.complete), [true, true]);
++});
++
++test("a stuck commit counter does not keep a worker alive", { timeout: 10_000 }, async t => {
++    const worker = await readyWorker("repeat");
++    const client = new SearchIndexClient(null, { inactivityTimeoutMs: timeoutMs, createWorker: () => worker });
++    t.after(() => client.close());
++    const exited = once(worker, "exit");
++    assert.equal(await client.query("stuck", "青枔", 5), null);
++    await exited;
++    assert.equal(worker.threadId, -1, "an unresponsive worker is terminated, not merely detached");
++});
++
++test("queued request progress and invalid counters cannot extend the active request", { timeout: 10_000 }, async t => {
++    const worker = await readyWorker("wrong-request");
++    const client = new SearchIndexClient(null, { inactivityTimeoutMs: timeoutMs, createWorker: () => worker });
++    t.after(() => client.close());
++    const results = await Promise.all([client.query("first", "青枔", 5), client.query("second", "岑舒", 5)]);
++    assert.deepEqual(results, [null, null]);
++});
++
++test("progress from a replaced worker cannot extend a new request", { timeout: 10_000 }, async t => {
++    const oldWorker = await readyWorker("silent");
++    const nextWorker = await readyWorker("silent");
++    const workers = [oldWorker, nextWorker];
++    const client = new SearchIndexClient(null, { inactivityTimeoutMs: timeoutMs, createWorker: () => {
++        const worker = workers.shift();
++        assert.ok(worker);
++        return worker;
++    } });
++    t.after(async () => { await client.close(); await Promise.all(workers.map(worker => worker.terminate())); });
++    assert.equal(await client.query("old", "青枔", 5), null);
++    let committed = 0;
++    const stale = setInterval(() => oldWorker.emit("message", { id: 2, progress: { committed: ++committed } }), intervalMs);
++    t.after(() => clearInterval(stale));
++    assert.equal(await client.query("new", "岑舒", 5), null);
++});
++
++test("close cancels a progressing request and all queued requests without awaiting completion", { timeout: 10_000 }, async t => {
++    const worker = await readyWorker("progress", 5_000);
++    const client = new SearchIndexClient(null, { inactivityTimeoutMs: timeoutMs, createWorker: () => worker });
++    t.after(() => client.close());
++    const progress = once(worker, "message");
++    const requests = [client.query("first", "青枔", 5), client.query("second", "岑舒", 5), client.query("first", "参数", 5)];
++    await progress;
++    await client.close();
++    assert.deepEqual(await Promise.all(requests), [null, null, null]);
++    assert.equal(worker.threadId, -1);
++    assert.equal(await client.query("closed", "青枔", 5), null);
++});
+diff --git a/tests/search-index-resume.test.ts b/tests/search-index-resume.test.ts
+new file mode 100644
+index 0000000..845899b
+--- /dev/null
++++ b/tests/search-index-resume.test.ts
+@@ -0,0 +1,216 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { DatabaseSync } from "node:sqlite";
++import { Worker } from "node:worker_threads";
++import { createRequire } from "node:module";
++import { pathToFileURL } from "node:url";
++import { UnifiedStore } from "../src/storage/store.js";
++import { SearchIndexJournal } from "../src/storage/search-index-journal.js";
++import { SearchIndexEngine } from "../src/storage/search-index-engine.js";
++import type { SqliteDatabase } from "../src/storage/driver.js";
++import type { SearchIndexResult } from "../src/storage/search-index-types.js";
++
++function fixture(t: { after: (fn: () => Promise<void>) => void }) {
++    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bili-search-resume-")), file = path.join(dir, "source.sqlite");
++    const owner = UnifiedStore.open(file), db = (owner as unknown as { db: SqliteDatabase }).db;
++    new SearchIndexJournal(db).ensure();
++    t.after(async () => { await owner.closeSearchIndex(); owner.close(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
++    const put = (seq: number, text: string, sharedHash?: string) => {
++        const hash = sharedHash ?? "source-" + seq, raw = Buffer.from(JSON.stringify({ text }));
++        db.prepare("INSERT OR IGNORE INTO content(hash,byte_len,bytes) VALUES(?,?,?)").run(hash, raw.length, raw);
++        db.prepare("INSERT INTO messages(session_id,seq,msg_id,role,kind,content_hash) VALUES('history',?,?, 'user','text',?)").run(seq, "m" + seq, hash);
++    };
++    return { file, db, put };
++}
++function indexedState(file: string) {
++    const db = new DatabaseSync(file + ".search.sqlite");
++    try {
++        return {
++            count: Number((db.prepare("SELECT count(*) AS n FROM docs WHERE session_id='history'").get() as { n: number }).n),
++            state: db.prepare("SELECT * FROM sessions WHERE session_id='history'").get() as { cursor: number; ready: number; revision: number; dirty_revision: number; dirty_seq: number },
++            texts: db.prepare("SELECT seq,body FROM docs WHERE session_id='history' ORDER BY seq").all() as { seq: number; body: string }[],
++        };
++    } finally { db.close(); }
++}
++function start(file: string, pauseAt: number | null, query = "岑舒") {
++    const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href;
++    const entry = new URL("../src/storage/search-index-engine.ts", import.meta.url).href;
++    const worker = new Worker(`const {workerData,parentPort}=require('node:worker_threads');
++(async()=>{ const {register}=await import(workerData.loader);register();
++const {SearchIndexEngine}=await import(workerData.entry);const engine=new SearchIndexEngine(workerData.file);
++try {const result=engine.query('history',workerData.query,12,{},progress=>{
++parentPort.postMessage({progress});
++if(workerData.pauseAt!==null && progress.committed>=workerData.pauseAt) Atomics.wait(new Int32Array(workerData.gate),0,0);
++});parentPort.postMessage({result});}finally{engine.close();}})().catch(error=>{parentPort.postMessage({error:String(error)});});`,
++        { eval: true, execArgv: [], workerData: { loader, entry, file, pauseAt, query, gate: new SharedArrayBuffer(4) } });
++    return worker;
++}
++function waitFor<T>(worker: Worker, select: (message: { progress?: { committed: number }; result?: SearchIndexResult; error?: string }) => T | undefined): Promise<T> {
++    return new Promise((resolve, reject) => {
++        const timeout = setTimeout(() => { cleanup(); reject(Error("index worker did not reach checkpoint")); }, 30_000);
++        const cleanup = () => { clearTimeout(timeout); worker.off("message", receive); worker.off("error", failed); worker.off("exit", exited); };
++        const failed = (error: Error) => { cleanup(); reject(error); };
++        const exited = (code: number) => failed(Error("index worker exited before result: " + code));
++        const receive = (message: Parameters<typeof select>[0]) => {
++            if (message.error) { failed(Error(message.error)); return; }
++            const selected = select(message); if (selected !== undefined) { cleanup(); resolve(selected); }
++        };
++        worker.on("message", receive); worker.on("error", failed); worker.on("exit", exited);
++    });
++}
++
++test("terminated first-build worker retains committed batches and resumes after prefix changes, deletes and new messages", async t => {
++    const f = fixture(t), total = 5_000;
++    f.db.transaction(() => { for (let seq = 0; seq < total; seq++) f.put(seq, `ordinary history ${seq} ` + "资料".repeat(8)); });
++    const first = start(f.file, 2_000);
++    try {
++        assert.equal(await waitFor(first, message => message.progress?.committed === 2_000 ? 2_000 : undefined), 2_000);
++        const checkpoint = indexedState(f.file);
++        assert.equal(checkpoint.count, 2_000, "all eight batches are committed before worker termination");
++        assert.equal(checkpoint.state.cursor, 1_999); assert.equal(checkpoint.state.ready, 0);
++    } finally { await first.terminate(); }
++    const stopped = indexedState(f.file); assert.equal(stopped.count, 2_000); assert.equal(stopped.state.cursor, 1_999);
++    f.db.prepare("UPDATE content SET bytes=? WHERE hash='source-1'").run(Buffer.from(JSON.stringify({ text: "岑舒更正 preserveRecentTokens=12000 early-amended" })));
++    f.db.prepare("DELETE FROM messages WHERE session_id='history' AND seq=2").run();
++    f.put(total, "青枔刚发送 --max-output=8192 latest-after-restart");
++    const resumed = start(f.file, null, "early-amended");
++    try {
++        const result = await waitFor(resumed, message => message.result);
++        assert.equal(result.complete, true); assert.deepEqual(result.matchIds, ["m1"]);
++        assert.equal(result.stats.indexed, 3_004, "resume scans only remaining rows plus the three journal edits");
++    } finally { await resumed.terminate(); }
++    const done = indexedState(f.file);
++    assert.equal(done.count, total); assert.equal(done.state.ready, 1);
++    assert.equal(done.texts.find(row => row.seq === 2), undefined);
++    assert.match(done.texts.find(row => row.seq === total)?.body ?? "", /青枔.*8192/);
++    const engine = new SearchIndexEngine(f.file);
++    try {
++        assert.deepEqual(engine.query("history", "岑舒", 3).matchIds, ["m1"]);
++        assert.deepEqual(engine.query("history", "preserveRecentTokens=12000", 3).matchIds, ["m1"]);
++        assert.deepEqual(engine.query("history", "青枔", 3).matchIds, ["m5000"]);
++        assert.deepEqual(engine.query("history", "4999", 3).matchIds, ["m4999"]);
++    } finally { engine.close(); }
++});
++
++test("dirty replay checkpoints tied revisions by sequence and preserves interrupted deletion/edit progress", async t => {
++    const f = fixture(t);
++    f.db.transaction(() => { for (let seq = 0; seq < 900; seq++) f.put(seq, "original shared-content", "shared"); });
++    const initial = new SearchIndexEngine(f.file);
++    try { initial.query("history", "original", 3); } finally { initial.close(); }
++    f.db.prepare("UPDATE content SET bytes=? WHERE hash='shared'").run(Buffer.from(JSON.stringify({ text: "岑舒 shared-amended parameter=12000" })));
++    const first = start(f.file, 250, "shared-amended");
++    try {
++        await waitFor(first, message => message.progress?.committed === 250 ? 250 : undefined);
++        const checkpoint = indexedState(f.file);
++        assert.equal(checkpoint.state.dirty_seq, 249);
++        assert.equal(checkpoint.texts.filter(row => row.body.includes("shared-amended")).length, 250);
++        assert.ok(checkpoint.state.dirty_revision > checkpoint.state.revision);
++    } finally { await first.terminate(); }
++    f.db.prepare("DELETE FROM messages WHERE session_id='history' AND seq=5").run();
++    f.put(900, "青枔 latest-during-delta");
++    const resumed = start(f.file, null, "shared-amended");
++    try {
++        const result = await waitFor(resumed, message => message.result);
++        assert.equal(result.complete, true); assert.equal(result.stats.indexed, 652);
++    } finally { await resumed.terminate(); }
++    const done = indexedState(f.file);
++    assert.equal(done.count, 900); assert.equal(done.texts.find(row => row.seq === 5), undefined);
++    assert.equal(done.texts.filter(row => row.body.includes("shared-amended")).length, 899);
++    assert.match(done.texts.at(-1)!.body, /青枔 latest-during-delta/);
++});
++
++test("another owner can advance the sidecar between batches without older snapshots overwriting its edits", async t => {
++    const f = fixture(t);
++    f.db.transaction(() => { for (let seq = 0; seq < 750; seq++) f.put(seq, "old words " + seq); });
++    const first = new SearchIndexEngine(f.file), second = new SearchIndexEngine(f.file);
++    try {
++        let intervened = false;
++        const result = first.query("history", "青枔", 3, {}, () => {
++            if (intervened) return; intervened = true;
++            f.db.prepare("UPDATE content SET bytes=? WHERE hash='source-1'").run(Buffer.from(JSON.stringify({ text: "青枔 intervening-owner" })));
++            f.db.prepare("DELETE FROM messages WHERE session_id='history' AND seq=2").run();
++            assert.deepEqual(second.query("history", "intervening-owner", 3).matchIds, ["m1"]);
++        });
++        assert.equal(result.complete, true); assert.deepEqual(result.matchIds, ["m1"]);
++        assert.equal(indexedState(f.file).count, 749);
++        assert.deepEqual(first.query("history", "old words 2", 3).matchIds.includes("m2"), false);
++    } finally { first.close(); second.close(); }
++});
++
++
++test("filtered source rows still report durable cursor progress without exposing an incomplete result", async t => {
++    const f = fixture(t);
++    f.db.transaction(() => {
++        for (let seq = 0; seq < 600; seq++) f.put(seq, "not searchable private reasoning");
++        f.db.prepare("UPDATE messages SET kind='reasoning' WHERE session_id='history'").run();
++        f.put(600, "青枔 current visible tail");
++    });
++    const engine = new SearchIndexEngine(f.file), progress: number[] = [];
++    try {
++        const result = engine.query("history", "青枔", 3, {}, value => {
++            progress.push(value.committed);
++            if (value.committed === 250) {
++                const checkpoint = indexedState(f.file);
++                assert.equal(checkpoint.count, 0); assert.equal(checkpoint.state.cursor, 249); assert.equal(checkpoint.state.ready, 0);
++            }
++        });
++        assert.deepEqual(progress, [250, 500, 601]);
++        assert.equal(result.complete, true); assert.deepEqual(result.matchIds, ["m600"]);
++    } finally { engine.close(); }
++});
++
++function legacyCheckpointSchema(file: string) {
++    const db = new DatabaseSync(file + ".search.sqlite");
++    try {
++        assert.match(String((db.prepare("SELECT generation FROM meta WHERE id=1").get() as { generation: string }).generation), /^redacted-grams-v2:/);
++        db.exec("BEGIN IMMEDIATE; ALTER TABLE sessions DROP COLUMN dirty_revision; ALTER TABLE sessions DROP COLUMN dirty_seq; COMMIT;");
++    } finally { db.close(); }
++}
++
++test("v2 ready index migrates checkpoints without rebuilding old history when one new message arrives", async t => {
++    const f = fixture(t);
++    f.db.transaction(() => { for (let seq = 0; seq < 800; seq++) f.put(seq, "preserved previous history " + seq); });
++    const old = new SearchIndexEngine(f.file);
++    try { assert.equal(old.query("history", "previous", 3).stats.indexed, 800); } finally { old.close(); }
++    const previousRevision = indexedState(f.file).state.revision;
++    legacyCheckpointSchema(f.file);
++    f.put(800, "青枔 just-sent preserveRecentTokens=12000");
++    const upgraded = new SearchIndexEngine(f.file);
++    try {
++        const migrated = indexedState(f.file);
++        assert.equal(migrated.count, 800);
++        assert.equal(migrated.state.dirty_revision, previousRevision);
++        assert.equal(migrated.state.dirty_seq, Number.MAX_SAFE_INTEGER);
++        const result = upgraded.query("history", "just-sent", 3);
++        assert.equal(result.complete, true); assert.equal(result.stats.indexed, 1);
++        assert.deepEqual(result.matchIds, ["m800"]);
++        assert.equal(indexedState(f.file).count, 801);
++    } finally { upgraded.close(); }
++});
++
++test("v2 incomplete index migration replays prefix edits instead of assuming its revision is complete", async t => {
++    const f = fixture(t);
++    f.db.transaction(() => { for (let seq = 0; seq < 600; seq++) f.put(seq, "legacy prefix body " + seq); });
++    const partial = start(f.file, 250);
++    try { await waitFor(partial, message => message.progress?.committed === 250 ? 250 : undefined); }
++    finally { await partial.terminate(); }
++    const paused = indexedState(f.file); assert.equal(paused.state.ready, 0); assert.equal(paused.count, 250);
++    legacyCheckpointSchema(f.file);
++    f.db.prepare("UPDATE content SET bytes=? WHERE hash='source-1'").run(Buffer.from(JSON.stringify({ text: "岑舒 legacy-prefix-corrected max_output=8192" })));
++    f.db.prepare("DELETE FROM messages WHERE session_id='history' AND seq=2").run();
++    const upgraded = new SearchIndexEngine(f.file);
++    try {
++        const migrated = indexedState(f.file);
++        assert.equal(migrated.state.ready, 0); assert.equal(migrated.state.cursor, 249);
++        assert.equal(migrated.state.dirty_revision, 0); assert.equal(migrated.state.dirty_seq, -1);
++        const result = upgraded.query("history", "legacy-prefix-corrected", 3);
++        assert.equal(result.complete, true); assert.deepEqual(result.matchIds, ["m1"]);
++        assert.equal(result.stats.indexed, 950);
++        const done = indexedState(f.file);
++        assert.equal(done.count, 599); assert.equal(done.texts.find(row => row.seq === 2), undefined);
++        assert.match(done.texts.find(row => row.seq === 1)?.body ?? "", /8192/);
++    } finally { upgraded.close(); }
++});
 diff --git a/tests/search-index.test.ts b/tests/search-index.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..7721426238b4f30b238ff789e57dee8e492c9013
+index 0000000..7721426
 --- /dev/null
 +++ b/tests/search-index.test.ts
 @@ -0,0 +1,183 @@
@@ -3511,7 +3957,7 @@ index 0000000000000000000000000000000000000000..7721426238b4f30b238ff789e57dee8e
 +});
 diff --git a/tests/search-long-benchmark.ts b/tests/search-long-benchmark.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..fee5edb996db0b9cb6ebfa7783ff7ecbc3c0585d
+index 0000000..fee5edb
 --- /dev/null
 +++ b/tests/search-long-benchmark.ts
 @@ -0,0 +1,143 @@
@@ -3660,7 +4106,7 @@ index 0000000000000000000000000000000000000000..fee5edb996db0b9cb6ebfa7783ff7ecb
 +} finally { await f.close(); }
 diff --git a/tests/search-long-fixture.ts b/tests/search-long-fixture.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..ffe512aab9bb07876f0628e770da553e875bc363
+index 0000000..ffe512a
 --- /dev/null
 +++ b/tests/search-long-fixture.ts
 @@ -0,0 +1,122 @@
@@ -3788,7 +4234,7 @@ index 0000000000000000000000000000000000000000..ffe512aab9bb07876f0628e770da553e
 +}
 diff --git a/tests/search-original-evidence.test.ts b/tests/search-original-evidence.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..14a9ce0d812743cf49584df9fd67c68e85c303ed
+index 0000000..14a9ce0
 --- /dev/null
 +++ b/tests/search-original-evidence.test.ts
 @@ -0,0 +1,33 @@
@@ -3826,7 +4272,7 @@ index 0000000000000000000000000000000000000000..14a9ce0d812743cf49584df9fd67c68e
 + session.lastMessages![0]!.text="new version";assert.match(run(target),/unavailable or changed/);
 +});
 diff --git a/tests/search-plan-aware.test.ts b/tests/search-plan-aware.test.ts
-index ea5bac1e3077c61ce649a701ec096ecb8570dc40..f64b980e18d798bb3a746c7e12f84e2d18691e49 100644
+index ea5bac1..f64b980 100644
 --- a/tests/search-plan-aware.test.ts
 +++ b/tests/search-plan-aware.test.ts
 @@ -193,7 +193,9 @@ test("own-session target entry point: flag off → plain; flag on → re-ranked"
@@ -3841,7 +4287,7 @@ index ea5bac1e3077c61ce649a701ec096ecb8570dc40..f64b980e18d798bb3a746c7e12f84e2d
      const on = executeSearchContextTarget({ query: "token" }, f.core, f.session.id, f.session.state, { messages: planMessages(), config: f.config, session: f.session, log: () => {} }).text;
      assert.notEqual(on, off, "flagged ctx → re-ranked output");
 diff --git a/tsup.config.ts b/tsup.config.ts
-index f77884f5d942f20894822f4215f06eab549a8df9..13ca72d0a4f1648d7b1f7febff2abbd8ad233792 100644
+index f77884f..13ca72d 100644
 --- a/tsup.config.ts
 +++ b/tsup.config.ts
 @@ -4,10 +4,12 @@ import { defineConfig } from "tsup";

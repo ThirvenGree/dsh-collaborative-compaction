@@ -2,6 +2,8 @@ import {createHash,randomUUID} from 'node:crypto';
 
 const hour=3600000,day=24*hour,leaseTime=660000;
 export const harvestLimits={sourceChars:120000,daily:4,queued:2,retention:20};
+export const harvestEnabled=c=>c.enabled===true&&c.replayHarvestEnabled===true&&c.reviewEnabled===true;
+export const harvestModelKey=c=>JSON.stringify([c.aProvider,c.aModel,c.reviewModel,c.reviewBase,c.reviewKeyEnv]);
 export const emptyHarvest=()=>({schema:1,day:'',attempts:0,nextRetryAt:0,seen:[],last:null,lease:null});
 const exact=(s,keys)=>s&&typeof s==='object'&&!Array.isArray(s)&&Object.keys(s).length===keys.length&&keys.every(k=>Object.hasOwn(s,k));
 const persistedReasons=new Set([
@@ -25,12 +27,15 @@ const dayKey=now=>{const d=new Date(now);return [d.getFullYear(),d.getMonth()+1,
 export class HarvestRunner{
  constructor({read,mutate,config,process,admit,onAdmit=()=>{},now=Date.now}){
   Object.assign(this,{read,mutate,config,process,admit,onAdmit,now});
-  this.queue=[];this.running=null;this.disposed=false;this.lastLocal=null;
+  this.queue=[];this.running=null;this.disposed=false;this.lastLocal=null;this.epoch=0;
  }
- enabled(){const c=this.config();return !this.disposed&&c.enabled&&c.replayHarvestEnabled;}
+ enabled(){return !this.disposed&&harvestEnabled(this.config());}
  status(){
-  const s=validateHarvestState(this.read());
-  return {enabled:this.enabled(),running:!!this.running,queued:this.queue.length,
+  const s=validateHarvestState(this.read()),c=this.config();
+  return {enabled:this.enabled(),configured:c.replayHarvestEnabled===true,reviewEnabled:c.reviewEnabled===true,
+   blockedReason:c.enabled&&c.replayHarvestEnabled&&!c.reviewEnabled?'交叉审核已关闭，自动提炼暂停；不会为样例审核发送正式会话原文。':null,
+   reviewEndpoint:c.reviewBase.replace(/\/$/,'')+'/responses',reviewModel:c.reviewModel,
+   running:!!this.running,queued:this.queue.length,
    today:{attempts:s.day===dayKey(this.now())?s.attempts:0,limit:harvestLimits.daily},nextRetryAt:s.nextRetryAt,
    last:this.lastLocal||s.last};
  }
@@ -61,28 +66,29 @@ export class HarvestRunner{
    this.queue=this.queue.filter(x=>!state.seen.some(s=>s.key===x.key&&s.status==='done'));
    const item=this.queue[0];if(!item)return;
    // Reserve before the first await so concurrent ticks cannot start the same in-memory work.
-   const id=randomUUID(),abort=new AbortController();this.running={key:item.key,id,abort};
+   const id=randomUUID(),abort=new AbortController(),epoch=this.epoch;this.running={key:item.key,id,abort};
    const claim=await this.mutate(old=>{
-    validateHarvestState(old);if(!this.enabled())return null;
+    validateHarvestState(old);if(!this.enabled()||this.epoch!==epoch||abort.signal.aborted)return null;
     const now=this.now(),count=old.day===dayKey(now)?old.attempts:0;
     if(old.nextRetryAt>now||old.lease?.until>now||count>=harvestLimits.daily||old.seen.some(x=>x.key===item.key&&x.status==='done'))return null;
     return {...old,day:dayKey(now),attempts:count+1,lease:{id,until:now+leaseTime},
      last:{status:'running',at:now,reason:'正在核对实际摘要遗漏并提炼脱敏题。'}};
    });
    if(!claim)return;
-   this.queue.shift();this.lastLocal=null;
-   const c=this.config(),modelKey=JSON.stringify([c.aProvider,c.aModel,c.reviewModel,c.reviewBase,c.reviewKeyEnv]);
+   this.queue=this.queue.filter(x=>x.key!==item.key);this.lastLocal=null;
+   const c=this.config(),modelKey=harvestModelKey(c);
+   const valid=()=>!this.disposed&&!abort.signal.aborted&&this.epoch===epoch&&this.enabled()&&harvestModelKey(this.config())===modelKey;
+   const assertAllowed=()=>{if(!valid())abort.abort(Error('自动提炼权限或审核配置已变化'));abort.signal.throwIfAborted();};
    let outcome;
-   try{outcome=await this.process(item,c,abort.signal);}catch{outcome={status:'held',retryable:true};}
+   try{assertAllowed();outcome=await this.process(item,c,abort.signal,assertAllowed);}catch{outcome={status:'held',retryable:true};}
    if(this.disposed||abort.signal.aborted||!this.enabled())return;
    const latest=this.config();
-   if(JSON.stringify([latest.aProvider,latest.aModel,latest.reviewModel,latest.reviewBase,latest.reviewKeyEnv])!==modelKey){outcome={status:'held'};}
+   if(harvestModelKey(latest)!==modelKey){outcome={status:'held'};}
    let admission;
    if(outcome.status==='admitted'){
     // admit executes inside the bank lock and must recheck valid() immediately before writing.
     admission=await this.admit({...outcome,claimId:id,sourceHash:item.sourceHash,summaryHash:item.summaryHash,
-     models:{generator:c.aProvider+'/'+c.aModel,reviewer:c.reviewModel}},()=>!this.disposed&&!abort.signal.aborted&&this.enabled()&&
-       JSON.stringify([this.config().aProvider,this.config().aModel,this.config().reviewModel,this.config().reviewBase,this.config().reviewKeyEnv])===modelKey);
+     models:{generator:c.aProvider+'/'+c.aModel,reviewer:c.reviewModel}},valid);
    }
    if(this.disposed||abort.signal.aborted||!this.enabled())return;
    const status=['added','duplicate','full','clean','held','conflict','cancelled'].includes(admission?.status||outcome.status)?admission?.status||outcome.status:'held';
@@ -90,7 +96,7 @@ export class HarvestRunner{
     status==='duplicate'?'同一来源或同一脱敏题已收录。':status==='full'?'脱敏题库已满，本次未新增。':
     status==='clean'?'未发现可复现的摘要遗漏。':outcome.retryable?'学习模型暂不可用，保留内存任务，退避后重试。':'没有通过遗漏核对、脱敏审核或回放，本次不入库。';
    const saved=await this.mutate(old=>{
-    if(this.disposed||!this.enabled()||old.lease?.id!==id)return null;
+    if(this.disposed||abort.signal.aborted||this.epoch!==epoch||!this.enabled()||old.lease?.id!==id)return null;
     const now=this.now();return {...old,lease:null,nextRetryAt:outcome.retryable?now+hour:0,
      seen:[...old.seen.filter(x=>x.key!==item.key),{key:item.key,status:outcome.retryable?'retry':'done',at:now}].slice(-200),
      last:{status,reason,at:now}};
@@ -102,7 +108,7 @@ export class HarvestRunner{
   }finally{this.running=null;}
  }
  async cancel(){
-  this.queue=[];const active=this.running;
+  this.epoch++;this.queue=[];const active=this.running;
   active?.abort.abort(Error('学习已停止'));
   if(active&&!this.disposed)try{await this.mutate(old=>{
    if(this.disposed||old.lease?.id!==active.id)return null;

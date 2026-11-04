@@ -1,7 +1,7 @@
 import {proposeClause} from './proposal.js';
 import {collectCases,validateChallengeGroups} from './challenge-bank.js';
 import {harvestCase} from './harvest.js';
-import {HarvestRunner,emptyHarvest,validateHarvestState} from './harvest-runner.js';
+import {HarvestRunner,emptyHarvest,validateHarvestState,harvestEnabled,harvestModelKey} from './harvest-runner.js';
 import {loadDynamicBank,addDynamicCase,selectDynamicCases,markDynamicCasesTested,clearDynamicBank,dynamicBankFile} from './dynamic-bank.js';
 import {emptyPolicy,effectivePolicy,evaluateFeedback,runBaseline,scopeOf,withPolicy} from './feedback.js';
 import {createReplayCheckpoint} from './replay-checkpoint.js';
@@ -279,9 +279,10 @@ export function apply(ctx){
    const old=fs.existsSync(harvestFile)?validateHarvestState(read(harvestFile)):emptyHarvest(),next=change(old);
    if(next)write(harvestFile,next);return next;
   })),
-  process:(item,c,signal)=>{
+  process:(item,c,signal,assertAllowed)=>{
+   assertAllowed();
    if(loadDynamicBank(dataRoot).entries.length>=20)return {status:'full'};
-   return replayCall(options=>harvestCase({...item,...options,
+   return replayCall(options=>harvestCase({...item,...options,assertAllowed,
     review:(system,input)=>reviewProposedClause(system,input,c,options.signal)}),signal,c);
   },
   admit:(value,valid)=>serialized(()=>kernelLock(harvestFile,()=>kernelLock(learnedFile,()=>{
@@ -508,8 +509,10 @@ export function apply(ctx){
     try{const current=policyState();policy=effectivePolicy(current,scopeOf(c));autoReady=automaticSchedule(current,'auto',Date.now(),scopeOf(c)).ready;}
     catch{replayError='策略记录无效，继续使用基础压缩策略。';}
    }
+   const harvestEpoch=harvester.epoch;
    const summary=await summarize(work,c,abort.signal,policy,observation=>{
-    if(disposed||!c.replayHarvestEnabled)return;
+    const current=config();
+    if(disposed||harvester.epoch!==harvestEpoch||!harvestEnabled(c)||!harvestEnabled(current)||harvestModelKey(c)!==harvestModelKey(current))return;
     harvester.enqueue({content:work.content,summary:observation.summary,trigger:work.trigger,
      eligible:payload.metadata.dsh_compaction.replayLearning!=='exclude'});
    });reply(res,200,{choices:[{message:{role:'assistant',content:summary},finish_reason:'stop'}]});
@@ -534,6 +537,7 @@ export function apply(ctx){
     }else{
      const before=config();
      const after=await saveSettings(input.changes??input,port,token,validateEngine,input.expected);
+     if(!harvestEnabled(after)||harvestModelKey(before)!==harvestModelKey(after))await harvester.cancel();
      const budgetChanged=['replaySliceCalls','replayDailyCalls','replayDailyTokens','replaySliceMs','replayResumeMinutes'].some(k=>before[k]!==after[k]);
      if(budgetChanged&&!replayJob)await changePolicy(old=>{
       if(old.calibration?.status!=='paused'||!['slice-calls','slice-time','daily-calls','daily-tokens','request-budget'].includes(old.calibration.pauseKind))return null;
@@ -541,7 +545,7 @@ export function apply(ctx){
       if(fs.existsSync(calibrationFile)){const paused=read(calibrationFile);if(paused.id===old.calibration.id)write(calibrationFile,{...paused,nextAt});}
       return {...old,nextRetryAt:nextAt,calibration:{...old.calibration,nextAt}};
      });
-     if(!after.enabled||!after.replayHarvestEnabled)await harvester.cancel();ready();
+     ready();
     }}else if(req.method!=='GET'){reply(res,405,{});return;}
    reply(res,200,{config:config(),csrf,health,replay:replayState(),retrieval:retrievalPolicy(),runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
   }catch(e){reply(res,400,{error:e.message});}

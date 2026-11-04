@@ -1,9 +1,18 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {setTimeout as delay} from 'node:timers/promises';
-import {fixtureCases,runReplaySuite,screenMethod} from '../replay.js';
+import {fixtureCases,runReplaySuite,screenMethod,replaySearch} from '../replay.js';
 const fixture=fixtureCases[0];
 const correct={answer:fixture.expected,citations:[{id:'r1',quote:fixture.expected}]};
+test('isolated replay always opts out of persistent process search caches',()=>{
+ let received;
+ const search=replaySearch((...args)=>{received=args;return 'evidence';});
+ const rows=[{id:'private',role:'user',text:'临时原文'}];
+ assert.equal(search(rows,'原文','check'), 'evidence');
+ assert.match(received[0].id,/^isolated-replay:/);
+ assert.deepEqual(received[7],{cache:false});
+ assert.equal(received[4][0].text,'临时原文');
+});
 test('only matching displayed records can ground an answer; summary can be correct without evidence',async()=>{
  const calls=[];
  const out=await runReplaySuite({cases:[fixture],provider:'p',model:'same',generate:async(_s,input,config)=>{

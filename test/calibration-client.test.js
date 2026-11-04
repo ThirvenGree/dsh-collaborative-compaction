@@ -79,3 +79,23 @@ test('running phase overrides a saved phase and budget pauses are not displayed 
  assert.match(rendered.text,/等待续跑/);
  assert(rendered.nodes.some(node=>node.props.className==='dcc-error dcc-tone-warn'));
 });
+
+test('harvest remains configured on while review is off and discloses original-text recipients and separate costs',()=>{
+ const state={...base,config:{...base.config,replayHarvestEnabled:true,reviewEnabled:false,aProvider:'deepseek',aModel:'ds-flash',reviewModel:'terra',reviewBase:'https://review.example/v1'},
+  replay:{...base.replay,harvest:{configured:true,enabled:false,blockedReason:'交叉审核已关闭；自动提炼已暂停。',reviewEndpoint:'https://review.example/v1/responses',reviewModel:'terra',today:{attempts:0,limit:4}}}};
+ const result=panel(state);
+ assert.match(result.text,/已暂停：交叉审核关闭/);
+ assert.match(result.text,/交叉审核已关闭；自动提炼已暂停/);
+ assert.match(result.text,/https:\/\/review\.example\/v1\/responses/);
+ assert.match(result.text,/deepseek \/ ds-flash/);
+ assert.match(result.text,/脱敏发生在模型处理之后/);
+ assert.match(result.text,/不计入上方策略校准/);
+ assert.match(result.text,/今日提炼任务/);
+ assert.match(result.text,/不是 4 次模型调用/);
+ const toggle=result.nodes.find(node=>node.props['aria-label']==='从正式压缩中提炼脱敏回放样例');
+ assert(toggle);assert.equal(toggle.props['aria-checked'],'true');
+ assert.equal(result.requests(),0);
+ const enabled=panel({...state,config:{...state.config,reviewEnabled:true},replay:{...state.replay,harvest:{...state.replay.harvest,enabled:true,blockedReason:null}}});
+ assert.match(enabled.text,/已开启，等待压缩结果/);
+ assert.doesNotMatch(enabled.text,/已暂停：交叉审核关闭/);
+});

@@ -7,7 +7,7 @@ const hour=3600000;
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 async function until(condition){for(let i=0;i<300;i++){if(condition())return;await delay(1);}assert.fail('runner did not reach expected state');}
 function harness(options={}){
- let state=structuredClone(options.state||emptyHarvest()),clock=Date.UTC(2026,10,4,4),current={enabled:true,replayHarvestEnabled:true,
+ let state=structuredClone(options.state||emptyHarvest()),clock=Date.UTC(2026,10,4,4),current={enabled:true,replayHarvestEnabled:true,reviewEnabled:true,
   aProvider:'dsh',aModel:'main-model',reviewModel:'review-model',reviewBase:'https://review.invalid',reviewKeyEnv:'FAKE_KEY'};
  const writes=[],calls=[],admissions=[],notifications=[];
  const read=()=>structuredClone(state);
@@ -34,6 +34,8 @@ test('only enabled eligible live compression queues learning; calibration/test/d
  for(const value of [item(1,{trigger:'calibration'}),item(2,{trigger:'test'}),item(3,{eligible:false}),item(4,{trigger:'direct'}),item(5,{content:''})])
   assert.equal(h.runner.enqueue(value),false);
  h.config({replayHarvestEnabled:false});assert.equal(h.runner.enqueue(item(6)),false);
+ h.config({replayHarvestEnabled:true,reviewEnabled:false});assert.equal(h.runner.enqueue(item(9)),false);assert.match(h.runner.status().blockedReason,/交叉审核已关闭/);
+ h.config({reviewEnabled:true});
  h.config({replayHarvestEnabled:true,enabled:false});assert.equal(h.runner.enqueue(item(7)),false);
  await h.runner.pump();assert.equal(h.calls.length,0);assert.equal(h.writes.length,0);
  h.config({enabled:true});assert.equal(h.runner.enqueue(item(8,{trigger:'tool'})),true);await done(h);assert.equal(h.calls.length,1);
@@ -103,6 +105,26 @@ test('changed model configuration invalidates a completed candidate instead of p
  assert.equal(h.read().seen[0].status,'done');
 });
 
+test('review-off gates queued work and cancelling survives re-enable before a late result',async()=>{
+ const gate=deferred(),h=harness({process:()=>gate.promise});
+ h.runner.enqueue(item(1));await until(()=>h.calls.length===1);h.runner.enqueue(item(2));
+ h.config({reviewEnabled:false});await h.runner.cancel();h.config({reviewEnabled:true});
+ gate.resolve({status:'admitted',group:{synthetic:true}});await done(h);
+ assert.equal(h.runner.status().queued,0);assert.equal(h.admissions.length,0);assert.equal(h.notifications.length,0);
+ await h.runner.pump();assert.equal(h.calls.length,1,'cleared private history is not resumed after re-enable');
+ h.config({reviewEnabled:false});assert.equal(h.runner.enqueue(item(3)),false);await h.runner.pump();assert.equal(h.calls.length,1);
+});
+
+test('per-call guard invalidates routing changes before another remote model call',async()=>{
+ const gate=deferred();let invoked=false;
+ const h=harness({process:async(_item,_c,_signal,assertAllowed)=>{
+  await gate.promise;assertAllowed();invoked=true;return {status:'admitted',group:{synthetic:true}};
+ }});
+ h.runner.enqueue(item());await until(()=>h.calls.length===1);
+ h.config({reviewBase:'https://new-review.invalid'});gate.resolve();await done(h);
+ assert.equal(invoked,false);assert.equal(h.admissions.length,0);
+});
+
 test('valid gate checked inside delayed admission lock prevents post-dispose or stale-model bank write',async()=>{
  for(const invalidate of ['dispose','model']){
   const gate=deferred();let lockEntered=false;
@@ -120,6 +142,16 @@ test('claim awaiting state lock rechecks lifecycle before writing or calling a m
  const h=harness({beforeMutate:async()=>{pending=true;await gate.promise;}});
  h.runner.enqueue(item());await until(()=>pending);h.runner.dispose();gate.resolve();await done(h);
  assert.equal(h.writes.length,0);assert.equal(h.calls.length,0);assert.equal(h.admissions.length,0);
+});
+
+test('review cancellation while claim waits cannot revive old work after re-enable',async()=>{
+ const gate=deferred();let pending=false;
+ const h=harness({beforeMutate:async()=>{pending=true;await gate.promise;}});
+ h.runner.enqueue(item(1));await until(()=>pending);
+ h.config({reviewEnabled:false});const cancelled=h.runner.cancel();h.config({reviewEnabled:true});
+ assert.equal(h.runner.enqueue(item(2)),true);gate.resolve();await cancelled;await done(h);
+ assert.equal(h.writes.length,0);assert.equal(h.calls.length,0);assert.equal(h.runner.status().queued,1);
+ await h.runner.pump();assert.equal(h.calls.length,1);assert.equal(h.calls[0][0].content,item(2).content);
 });
 
 test('invalid persistent counters and hash keys are rejected before processing',()=>{
