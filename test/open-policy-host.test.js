@@ -42,7 +42,7 @@ test('newly reported evidence dependency can become a scoped production strategy
  assign(vars);const originalFetch=globalThis.fetch;
  t.after(()=>{globalThis.fetch=originalFetch;assign(original);fs.rmSync(dir,{recursive:true,force:true});});
  const {defaults}=await import('../runtime.js'),{apply}=await import('../host.js');
- fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replayHarvestEnabled:false,claudeEnabled:false,reviewEnabled:false,plannerEnabled:false,
+ fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replaySliceCalls:100,replayDailyCalls:10000,replayDailyTokens:100000000,replayHarvestEnabled:false,claudeEnabled:false,reviewEnabled:false,plannerEnabled:false,
   factCheckEnabled:false,aProvider:'fixture',aModel:'fixture-dsh',reviewBase:apiBase,reviewKeyEnv:'LOCAL_FAKE_POLICY_TOKEN',retries:0}));
  fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:engine}));
  const bankFile=path.join(dir,'feedback-cases.json');
@@ -121,7 +121,7 @@ test('newly reported evidence dependency can become a scoped production strategy
  async function stop(){for(const fn of clean.reverse())await fn();clean=[];}
  async function post(endpoint,body){
   const res=await apiPost(base+endpoint,body,{authorization:'Bearer '+token});const out=await res.json();
-  assert.ok(res.ok,JSON.stringify(out));return out;
+  assert.ok(res.ok,JSON.stringify(out));if(endpoint==='/v1/replay'&&out.feedback.status==='paused')return post(endpoint,body);return out;
  }
  const settingsUrl=()=>`http://127.0.0.1:${ui.address().port}/dsh-collaborative-compaction/state`;
  const state=async()=>(await fetch(settingsUrl())).json();
@@ -166,13 +166,13 @@ test('newly reported evidence dependency can become a scoped production strategy
    const proposed=proposals.length,reviewed=audits.length,generated=revisionCompressions;
    const failed=await post('/v1/replay',{});
    assert.notEqual(failed.feedback.status,'promoted',phase);
-   assert.equal(proposals.length,proposed+1,phase+' must exercise the proposal model');
+   assert.equal(proposals.length,proposed+(phase==='bank-changed'?0:1),phase==='bank-changed'?'a successful author draft survives a reviewer outage':phase+' must exercise the proposal model');
    if(phase==='forged')assert.equal(revisionCompressions,generated,'forbidden content must not reach any compressor');
    else assert.equal(audits.length,reviewed+1,'each admissible successor needs independent review');
    if(phase==='overfit')assert(revisionCompressions>generated,'test must exercise the positive holdout against the proposed successor');
    if(phase==='unavailable'){assert.equal(failed.feedback.status,'unavailable');assert.equal(revisionCompressions,generated);}
    if(phase==='bank-changed'){
-    assert(bankChanged);assert.equal(failed.feedback.status,'held');
+    assert(bankChanged);assert.equal(failed.feedback.status,'invalidated');
     assert.match(failed.feedback.reason,/样例|校准包/);
     fs.writeFileSync(bankFile,bankText);
    }

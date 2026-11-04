@@ -124,6 +124,15 @@ test('open clause outside legacy families is promoted only after genuine discove
  assert.throws(()=>effectivePolicy({active:{...installed,clauses:[{...conditional,relation:'change all settings'}]}},base.scope));
 });
 
+test('actual regenerated control must pass before a prepared diagnostic can authorize proposals or a baseline',async()=>{
+ const h=openHarness({hideBefore:'r6'});
+ const result=await h.run();
+ assert.equal(result.status,'held');assert.equal(result.candidate,undefined);assert.equal(h.calls.proposals,0);
+ assert.equal(result.before['adequate-summary-control'].full,true);
+ assert.equal(result.before['adequate-summary-control'].summary,false);
+ assert.match(result.reason,/正对照未通过/);
+});
+
 test('one lucky or unlucky generation cannot promote a policy: same-budget target and holdouts must replicate',async()=>{
  const luckyOld=openHarness({flakyBaseline:true}),notStable=await luckyOld.run();
  assert.equal(notStable.status,'held');assert.equal(notStable.candidate,undefined);

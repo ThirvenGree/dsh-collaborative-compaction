@@ -61,7 +61,8 @@ function classify(lanes){
  if(!lanes.retrieval.foundRequired)return 'search-missed-evidence';
  return 'evidence-returned-answer-failed';
 }
-export async function runReplaySuite({cases,generate,search,provider,model,signal,method,concurrency=3}){
+export async function runReplaySuite({cases,generate,search,provider,model,signal,method,concurrency=3,checkpoint,phase='diagnostic',onPhase}){
+ onPhase?.(phase);
  let providerFailure;
  const fatal=new AbortController(),callSignal=signal?AbortSignal.any([signal,fatal.signal]):fatal.signal;
  const probes=await mapReplayTasks(cases,async test=>{
@@ -77,7 +78,13 @@ export async function runReplaySuite({cases,generate,search,provider,model,signa
      const prompt=system+(allow?' 本轮有只读 search_context；如需原文可先只返回 {"query":"关键词"}。用简短、出现在记录中的关键词；如需展开整条，使用返回的 open: 引用。':' 现在提交最终回答。');
      const input={question:test.question,...(method?{method}:{}),material,...(turns.length?{recall:turns}:{})};
      calls++;
-     const value=await generate(prompt,input,{provider,model,signal:callSignal});
+     const read=async()=>{
+      const result=await generate(prompt,input,{provider,model,signal:callSignal});
+      // Malformed responses are retryable failures, not successful checkpoints.
+      if(!(allow&&typeof result?.query==='string'&&result.query.trim())&&(typeof result?.answer!=='string'||!Array.isArray(result.citations)))throw Error('模型返回格式不符合回放协议');
+      return result;
+     };
+     const value=checkpoint?await checkpoint(`${phase}/reader/${test.id}/${lane}/${turns.length}`,{prompt,input,provider,model},read):await read();
      signal?.throwIfAborted();if(providerFailure)throw Object.assign(Error(providerFailure),{stopReplay:true});
      if(allow&&typeof value?.query==='string'&&value.query.trim()){
       const query=value.query.trim().slice(0,250),result=await search(test.records,query,test.id,add);
@@ -88,7 +95,7 @@ export async function runReplaySuite({cases,generate,search,provider,model,signa
      const foundRequired=test.requiredIds.every(id=>visible.get(id)?.some(excerpt=>test.requiredQuotes?.[id]?excerpt.includes(test.requiredQuotes[id]):excerpt.trim().length>=4));
      lanes[lane]={...judge(test,value,visible),calls,queries,foundRequired};break;
     }
-   }catch(error){if(signal?.aborted)throw signal.reason;if(error.stopReplay){providerFailure??=String(error.message).slice(0,350);fatal.abort(error);}lanes[lane]={pass:false,calls,queries,error:providerFailure||String(error.message).slice(0,350)};}
+   }catch(error){if(signal?.aborted)throw signal.reason;if(error.paused||error.replayPause||error.checkpointFailure||['CALIBRATION_PAUSED','REPLAY_PAUSED'].includes(error.code))throw error;if(error.stopReplay){providerFailure??=String(error.message).slice(0,350);fatal.abort(error);}lanes[lane]={pass:false,calls,queries,error:providerFailure||String(error.message).slice(0,350)};}
   }
   return {id:test.id,classification:classify(lanes),lanes};
  },{signal,concurrency});

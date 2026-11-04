@@ -12,7 +12,7 @@ test('operational timeouts, retries, key names, context and trigger controls pre
  const changes={timeoutMs:500000,replayTimeoutMs:3600000,retries:3,claudeKeyEnv:'ALTERNATIVE_CLAUDE_KEY',reviewKeyEnv:'ALTERNATIVE_REVIEW_KEY',
   preserveRecentTokens:32000,autoFoldTargetTokens:150000,claudeContextTokens:1200000,reviewContextTokens:1200000,
   plannerEnabled:false,plannerModel:'another-planner',plannerTimeoutMs:25000,plannerOutputTokens:4096,
-  replayFeedbackEnabled:false,replayHarvestEnabled:false,enabled:false};
+  replaySliceCalls:1,replayDailyCalls:5,replayDailyTokens:100000,replaySliceMs:3000,replayResumeMinutes:60,replayFeedbackEnabled:false,replayHarvestEnabled:false,enabled:false};
  for(const [key,value]of Object.entries(changes)){
   const revised={...c,[key]:value};assert.equal(scopeOf(revised),scopeOf(c),key+' must not invalidate policy');
   assert.equal(scopeStatus({active:active()},revised).status,'matched');
@@ -57,33 +57,43 @@ test('only an exact legacy configuration hash migrates; unknown hashes keep clau
  assert.equal(migrateLegacyScope(before,{...c,retries:2}),before,'cannot assume an unknown legacy config matched even for an operational field');
 });
 
-test('a first ordinary compression or failed first manual run never arms automatic calibration',()=>{
+test('first use schedules small bootstrap without any manual prerequisite',()=>{
  const now=1800000000000;
  for(const initial of [{lastAttempt:null},{lastAttempt:0},{lastAttempt:now}])for(const kind of ['auto','learned']){
-  const result=automaticSchedule(initial,kind,now+week*10);
-  assert.equal(result.ready,false);assert.equal(result.requiresManual,true);assert.equal(result.nextAt,null);
+  const result=automaticSchedule(initial,kind,now);
+  assert.equal(result.ready,true);assert.equal(result.requiresManual,false);assert.equal(result.phase,'bootstrap');
  }
- const failed=settleSchedule({lastAttempt:now},{origin:'manual',completed:false,now});
- assert.equal(manualBaseline(failed),null);assert.equal(automaticSchedule(failed,'auto',now+week).requiresManual,true);
- const legacyFailed={last:{origin:'manual',status:'unavailable',before:{},at:now}};
- assert.equal(manualBaseline(legacyFailed),null);
+ const failed=settleSchedule({lastAttempt:now},{origin:'auto',completed:false,now});
+ assert.equal(automaticSchedule(failed,'auto',now).ready,false);
+ assert.equal(automaticSchedule(failed,'auto',now+retryDelay).ready,true);
 });
 
-test('completed manual calibration arms both schedules; legacy completion is accepted but automatic provenance is not',()=>{
+test('completed actual baseline schedules future checks; manual metadata alone is not a quality baseline',()=>{
  const now=1800000000000;
- const state=settleSchedule({lastAttempt:now},{origin:'manual',completed:true,now});
- assert.equal(manualBaseline(state),now);assert.equal(state.nextRetryAt,0);
- assert.equal(automaticSchedule(state,'auto',now).nextAt,now+week);
- assert.equal(automaticSchedule(state,'learned',now).nextAt,now+retryDelay);
- assert.equal(automaticSchedule(state,'auto',now+week).ready,true);
- assert.equal(automaticSchedule(state,'learned',now+retryDelay).ready,true);
- for(const status of ['promoted','held','unchanged'])assert.equal(manualBaseline({last:{origin:'manual',status,before:{},at:now}}),now);
- for(const origin of ['auto','learned'])assert.equal(manualBaseline({last:{origin,status:'promoted',before:{},at:now}}),null);
+ const state=settleSchedule({lastAttempt:now,baseline:{at:now,scope:'a',revision:0},revision:0},{origin:'auto',completed:true,now});
+ assert.equal(manualBaseline(state),null);assert.equal(state.nextRetryAt,0);
+ assert.equal(automaticSchedule(state,'auto',now,'a').nextAt,now+week);
+ assert.equal(automaticSchedule(state,'learned',now,'a').nextAt,now+retryDelay);
+ assert.equal(automaticSchedule(state,'auto',now+week,'a').ready,true);
+ assert.equal(automaticSchedule({...state,revision:1},'auto',now,'a').phase,'bootstrap');
+ assert.equal(automaticSchedule({...state,revision:1},'auto',now,'a').ready,true);
+ assert.equal(automaticSchedule(state,'auto',now,'different-model').ready,true);
+ assert.equal(automaticSchedule({manualBaselineAt:now},'auto',now).phase,'bootstrap');
+});
+
+test('a paused checkpoint resumes before weekly schedule; pending failures start validation',()=>{
+ const now=1800000000000,base={revision:0,baseline:{at:now,scope:'a',revision:0},lastCompletedAt:now};
+ const paused={...base,calibration:{revision:0,scope:'a',kind:'bootstrap',status:'paused',nextAt:now+900000}};
+ assert.equal(automaticSchedule(paused,'auto',now,'a').ready,false);
+ assert.equal(automaticSchedule(paused,'auto',now+900000,'a').ready,true);
+ assert.equal(automaticSchedule({...paused,lease:{until:now+1200000}},'auto',now+900000,'a').ready,false);
+ const missed={...base,pendingValidation:{scope:'a',nextAt:now+900000}};
+ assert.equal(automaticSchedule(missed,'auto',now+900000,'a').phase,'validation');
 });
 
 test('technical failures retry after a day rather than a new week and apply global backoff to both automatic origins',()=>{
  const now=1800000000000,baseline=now-week-1000;
- const armed={manualBaselineAt:baseline,lastCompletedAt:baseline,lastLearnedCompletedAt:baseline,lastAttempt:now};
+ const armed={baseline:{at:baseline},manualBaselineAt:baseline,lastCompletedAt:baseline,lastLearnedCompletedAt:baseline,lastAttempt:now};
  for(const origin of ['auto','learned']){
   const failed=settleSchedule(armed,{origin,completed:false,now});
   assert.equal(failed.lastCompletedAt,baseline);assert.equal(failed.nextRetryAt,now+retryDelay);
@@ -100,7 +110,7 @@ test('technical failures retry after a day rather than a new week and apply glob
 });
 
 test('a completed later calibration clears retry state and schedules from completion, not its starting attempt',()=>{
- const now=1800000000000,old={manualBaselineAt:now-week,lastCompletedAt:now-week,lastAttempt:now-1200000,
+ const now=1800000000000,old={baseline:{at:now-week},manualBaselineAt:now-week,lastCompletedAt:now-week,lastAttempt:now-1200000,
   nextRetryAt:now+retryDelay,retryOrigin:'auto'};
  const settled=settleSchedule(old,{origin:'auto',completed:true,now});
  assert.equal(settled.lastCompletedAt,now);assert.equal(settled.nextRetryAt,0);assert.equal(settled.retryOrigin,null);

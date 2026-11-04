@@ -66,22 +66,37 @@ const stop=report=>report.probes.flatMap(p=>Object.values(p.lanes)).find(l=>l.er
 function chunks(list,size=4){
  return Array.from({length:Math.ceil(list.length/size)},(_,i)=>list.slice(i*size,(i+1)*size));
 }
+const phased=(options,phase)=>({...options,phase:(options.phase||'feedback')+'/'+phase});
+const checkpointTask=(options,key,input,fn)=>options.checkpoint?options.checkpoint(`${options.phase||'feedback'}/${key}`,input,fn):fn();
 async function regenerated(suites,policy,{options,compress,onlyIds}){
+ options.onPhase?.(options.phase||'feedback');
  const cases=[],summaries=new Map();
- const batches=await mapReplayTasks(suites,async suite=>{
+ const batches=await mapReplayTasks(suites,async (suite,index)=>{
   options.signal?.throwIfAborted();
   const source=suite.flatMap(x=>x.records);
   const noise=background.map((text,i)=>({id:'noise-'+i,role:'assistant',text}));
   const records=source.flatMap((r,i)=>noise[i]?[noise[i],r]:[r]).concat(noise.slice(source.length));
   const content=records.map(r=>'['+r.id+'] '+r.text).join('\n');
-  const summary=await compress({content,reference:'',instructions:'Summarize the current decisions and task state. Cite relevant record IDs as [id] alongside short exact evidence where available.',trigger:'calibration',minSummaryChars:1,maxSummaryChars:420},policy);
+  const work={content,reference:'',instructions:'Summarize the current decisions and task state. Cite relevant record IDs as [id] alongside short exact evidence where available.',trigger:'calibration',minSummaryChars:1,maxSummaryChars:420};
+  const key=`compression/${index}`;
+  const summary=await checkpointTask(options,key,{work,policy},()=>compress(work,policy,{phase:options.phase||'feedback',key}));
   const summaryCitations=citedSpans(summary,records);
   return suite.filter(t=>!onlyIds||onlyIds.has(t.id)).map(t=>({...t,records,summary,summaryCitations}));
- },{signal:options.signal});
+ },{signal:options.signal,concurrency:options.concurrency??3});
  for(const batch of batches)for(const test of batch){cases.push(test);summaries.set(test.id,test.summary);}
  const report=await runReplaySuite({...options,cases});
  if(stop(report))throw Error(stop(report).error);
  return {before:quality(report.probes),summaries,report};
+}
+// A bounded bootstrap diagnoses the current compressor. It never proposes or
+// installs a policy; a completed baseline may still have identified real omissions.
+export async function runBaseline({active,options,compress,cases=diagnosticCases}){
+ if(!Array.isArray(cases)||!cases.length||new Set(cases.map(t=>t.id)).size!==cases.length||!cases.some(t=>t.id===bankControl.id))throw Error('Baseline requires distinct cases and the positive control');
+ const result=await regenerated(chunks(cases),active,{options:{...options,phase:options.phase||'bootstrap'},compress});
+ const {before,report}=result;
+ const failures=cases.filter(t=>t.id!==bankControl.id&&!before[t.id].summary).map(t=>t.id);
+ const valid=Object.values(before).every(q=>q.full)&&before[bankControl.id].summary&&before[bankControl.id].retrieval;
+ return {status:valid?'baseline-complete':'held',reason:valid?(failures.length?'已完成小批当前策略基线，发现待复现的压缩遗漏；尚未修改策略。':'已完成小批当前策略基线，本批未发现压缩遗漏；尚未修改策略。'):'原文或正对照未通过，尚不能将差异归因于压缩。',before,report,failures,covered:cases.map(t=>t.id)};
 }
 function regressed(before,after){
  return Object.keys(before).some(id=>['full','summary','retrieval','summaryCorrect','retrievalCorrect'].some(lane=>before[id][lane]&&!after[id][lane]));
@@ -91,15 +106,18 @@ async function modelFeedback({active,nextVersion,options,compress,propose},bank)
  // Separate compression corpora as well as prompts. The summaries sent to the proposer must not contain holdouts.
  const discoverySuites=chunks(bank.diagnostics);
  const hiddenSuites=chunks(bank.groups.flatMap(g=>[g.positive,g.counter]));
- const oldDiscovery=await regenerated(discoverySuites,active,{options,compress});
+ const oldDiscovery=await regenerated(discoverySuites,active,{options:phased(options,'discovery-old-1'),compress});
  const beforeDiscovery=oldDiscovery.before;
  if(Object.values(beforeDiscovery).some(q=>!q.full))return unchanged('重生成后的原文组未通过。',{before:beforeDiscovery});
+ if(!beforeDiscovery[bankControl.id]?.summary||!beforeDiscovery[bankControl.id]?.retrieval)return unchanged('实际生成摘要的正对照未通过，不能把本轮作为可靠基线。',{before:beforeDiscovery});
  const failures=bank.diagnostics.filter(t=>t.id!==bankControl.id&&!beforeDiscovery[t.id].summary).map(t=>{
   const probe=oldDiscovery.report.probes.find(p=>p.id===t.id);
   return {...t,summary:oldDiscovery.summaries.get(t.id),classification:probe.classification,summaryAnswer:probe.lanes.summary.answer,summaryCited:probe.lanes.summary.cited,summaryCorrect:probe.lanes.summary.correct,retrievalRecovered:probe.lanes.retrieval.pass};
  });
  if(!failures.length)return {status:'unchanged',reason:'现行策略重生成的摘要已经通过，未复现诊断遗漏。',before:beforeDiscovery};
- const response=await propose({failures,active:checkedClauses(active.clauses)});
+ const proposalInput={failures,active:checkedClauses(active.clauses)};
+ options.onPhase?.((options.phase||'feedback')+'/proposal-review');
+ const response=await checkpointTask(options,'proposal-review',proposalInput,()=>propose(proposalInput));
  if(response?.status!=='candidate')return unchanged(response?.reason||'没有通过独立审核的模型提案。',{before:beforeDiscovery});
  const {targets,replaceId}=response;
  if(!Array.isArray(targets)||targets.length<1||targets.length>2||new Set(targets).size!==targets.length||!targets.every(id=>failures.some(f=>f.id===id)))
@@ -115,10 +133,10 @@ async function modelFeedback({active,nextVersion,options,compress,propose},bank)
  const disallowed=bank.all.flatMap(t=>[t.expected,t.question,...t.records.map(r=>r.text),...Object.values(t.requiredQuotes||{})]);
  if(disallowed.some(v=>v.length>=4&&text.includes(v.normalize('NFKC').toLowerCase())))return unchanged('候选出现校准题的专用字面量，未采用。');
  const candidate={...active,version:nextVersion,clauses};
- const oldHidden=await regenerated(hiddenSuites,active,{options,compress});
+ const oldHidden=await regenerated(hiddenSuites,active,{options:phased(options,'hidden-old-1'),compress});
  const before={...beforeDiscovery,...oldHidden.before};
  if(Object.values(oldHidden.before).some(q=>!q.full))return unchanged('未见场景的原文对照不可靠。',{before});
- const {before:after}=await regenerated([...discoverySuites,...hiddenSuites],candidate,{options,compress});
+ const {before:after}=await regenerated([...discoverySuites,...hiddenSuites],candidate,{options:phased(options,'candidate-1'),compress});
  const noRegression=!regressed(before,after),control=after[bankControl.id].summary&&after[bankControl.id].retrieval;
  const recovered=targets.filter(id=>{
   const {positive,counter}=bank.groups.find(g=>g.probe.id===id),unseen=[positive.id,counter.id];
@@ -133,7 +151,7 @@ async function modelFeedback({active,nextVersion,options,compress,propose},bank)
   const group=bank.groups.find(g=>g.probe.id===id);return [id,group.positive.id,group.counter.id];
  })]);
  const repeatSuites=[...discoverySuites,...hiddenSuites].filter(suite=>suite.some(t=>repeatIds.has(t.id)));
- const {before:repeatBefore}=await regenerated(repeatSuites,active,{options,compress,onlyIds:repeatIds});
+ const {before:repeatBefore}=await regenerated(repeatSuites,active,{options:phased(options,'old-repeat-2'),compress,onlyIds:repeatIds});
  const counts=Object.fromEntries(targets.map(id=>{
   const {positive,counter}=bank.groups.find(g=>g.probe.id===id);
   return [id,{oldFailures:Number(!before[id].summary)+Number(!repeatBefore[id].summary),
@@ -143,7 +161,7 @@ async function modelFeedback({active,nextVersion,options,compress,propose},bank)
  proof.repeat={before:repeatBefore};
  proof.gates.repeatable={required:2,passed:false,targets:counts};
  if(!oldStable)return unchanged('目标题或未见题的旧策略失误未能重复两次，可能是采样波动，保留现行策略。',proof);
- const {before:repeatAfter}=await regenerated(repeatSuites,candidate,{options,compress,onlyIds:repeatIds});
+ const {before:repeatAfter}=await regenerated(repeatSuites,candidate,{options:phased(options,'candidate-repeat-2'),compress,onlyIds:repeatIds});
  proof.repeat.after=repeatAfter;
  for(const id of targets){
   counts[id].newPasses=Number(after[id].full&&after[id].summary&&after[id].retrieval)+Number(repeatAfter[id].full&&repeatAfter[id].summary&&repeatAfter[id].retrieval);
@@ -170,15 +188,15 @@ export async function evaluateFeedback(args){
  if(propose)return modelFeedback(args,bank);
  if(!misses.length)return {status:'unchanged',reason:'本轮未发现需要调整的压缩遗漏。'};
  // Compatibility path for callers of the original diagnostic API, without a proposal service.
- const run=async policy=>(await regenerated([fixtureCases,holdouts],policy,{options,compress})).before;
- const before=await run(active);
+ const run=async (policy,phase)=>(await regenerated([fixtureCases,holdouts],policy,{options:phased(options,phase),compress})).before;
+ const before=await run(active,'legacy-old-1');
  if(Object.values(before).some(q=>!q.full))return unchanged('重生成对照中，原文组未通过。',{before});
  const signals=Object.keys(families).filter(id=>misses.some(t=>t.id===families[id].probe)&&!before[families[id].probe].summary);
  if(!signals.length)return {status:'unchanged',reason:'现行策略重生成的摘要已经通过，未复现诊断遗漏。',before};
  const revised=signals.map(id=>active.rules.includes(id)?id+'-anchored':id);
  const retained=active.rules.filter(id=>!signals.includes(id.replace(/-anchored$/,'')));
  const candidate={...active,version:nextVersion,rules:[...retained,...revised]};
- const after=await run(candidate);
+ const after=await run(candidate,'legacy-candidate-1');
  const recovered=signals.filter(key=>{const {probe,holdout}=families[key];return !before[probe].summary&&after[probe].summary&&after[probe].retrieval&&after[holdout].summary&&after[holdout].retrieval;});
  const gates={noRegression:!regressed(before,after),control:after[control].summary&&after[control].retrieval,recovered};
  if(!gates.noRegression||!gates.control||recovered.length!==signals.length)return unchanged('候选未逐项改善已复现的失误、未通过未见情境或使其他表现退步。',{before,after,gates,proposed:revised});

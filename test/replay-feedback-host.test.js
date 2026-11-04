@@ -10,7 +10,7 @@ const engine=process.env.COLLAB_TEST_ENGINE||path.resolve(import.meta.dirname,'.
 const engineInstalled=fs.existsSync(path.join(engine,'dist/external-summary-settings.js'));
 
 // Exercise both plugin HTTP paths with the installed engine's search. Only the model is simulated.
-test('first compression waits for manual calibration; later automatic replay and restarted host retain the policy',
+test('first compression bootstraps without modifying policy; full validation and restarted host retain the adopted policy',
  {skip:engineInstalled?false:'Build the patched engine and set COLLAB_TEST_ENGINE to run the HTTP integration.',timeout:30000},async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'collab-policy-http-'));
  const env={DSH_HOME:path.join(dir,'home'),DSH_COLLAB_TEST_HOME:dir,BILI_CONFIG_FILE:path.join(dir,'engine.json'),DSH_PROFILE_DIR:undefined,LOCAL_REPLAY_TEST_KEY:'fixture-only'};
@@ -29,7 +29,7 @@ test('first compression waits for manual calibration; later automatic replay and
  };
  t.after(()=>{globalThis.fetch=nativeFetch;});
  const {defaults}=await import('../runtime.js'),{apply}=await import('../host.js');
- fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replayHarvestEnabled:false,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:false,aProvider:'test',aModel:'fixture',reviewBase:'https://policy-review.invalid/v1',reviewKeyEnv:'LOCAL_REPLAY_TEST_KEY'}));
+ fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replaySliceCalls:100,replayDailyCalls:10000,replayDailyTokens:100000000,replayHarvestEnabled:false,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:false,aProvider:'test',aModel:'fixture',reviewBase:'https://policy-review.invalid/v1',reviewKeyEnv:'LOCAL_REPLAY_TEST_KEY'}));
  fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:engine}));
  const seen=[];
  async function* stream(req){
@@ -74,18 +74,18 @@ test('first compression waits for manual calibration; later automatic replay and
   };
   compress.calibrate=async()=>{
    const response=await fetch('http://127.0.0.1:'+port+'/v1/replay',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:'{}'});
-   assert.equal(response.status,200);return response.json();
+   assert.equal(response.status,200);const value=await response.json();return value.feedback.status==='paused'?compress.calibrate():value;
   };
   return compress;
  };
  try{
   const compress=await start();await compress('隔离收据，第一次正常压缩。');
-  await delay(80);assert.equal(fs.existsSync(path.join(dir,'fixture-replay.json')),false,'first successful compression must not secretly calibrate');
+  const initial=await untilFile(path.join(dir,'fixture-replay.json'));assert.equal(initial.feedback.status,'baseline-complete',initial.feedback.reason);assert.equal(initial.feedback.kind,'bootstrap');assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'compression-policy.json'),'utf8')).active.version,0,'bootstrap cannot adopt a policy');
   const report=await compress.calibrate();
   assert.equal(report.feedback.origin,'manual');assert.equal(report.feedback.status,'promoted',report.feedback.reason);
   assert.ok(report.telemetry.elapsedMs>=0);assert.ok(report.telemetry.readerCalls>0);assert.ok(report.telemetry.pipelineCalls>0);
   const policyFile=path.join(dir,'compression-policy.json'),policy=JSON.parse(fs.readFileSync(policyFile,'utf8'));
-  assert.ok(policy.manualBaselineAt>0);policy.lastCompletedAt=Date.now()-8*86400000;policy.manualBaselineAt=policy.lastCompletedAt;
+  assert.ok(policy.manualBaselineAt>0);policy.lastCompletedAt=Date.now()-8*86400000;policy.manualBaselineAt=policy.lastCompletedAt;policy.baseline.at=policy.lastCompletedAt;
   fs.writeFileSync(policyFile,JSON.stringify(policy));fs.unlinkSync(path.join(dir,'fixture-replay.json'));
   await compress('隔离收据，第二次正常压缩。');
   assert.equal((await untilFile(path.join(dir,'fixture-replay.json'))).feedback.origin,'auto');

@@ -48,8 +48,8 @@ test('authenticated production compression learns isolated synthetic cases, repl
  const previous=Object.fromEntries(Object.keys(vars).map(k=>[k,process.env[k]])),realFetch=globalThis.fetch;
  const env=values=>{for(const[k,v]of Object.entries(values)){if(v===undefined)delete process.env[k];else process.env[k]=v;}};
  env(vars);t.after(()=>{globalThis.fetch=realFetch;env(previous);fs.rmSync(dir,{recursive:true,force:true});});
- const {defaults}=await import('../runtime.js'),{apply}=await import('../host.js');
- fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replayFeedbackEnabled:false,replayHarvestEnabled:true,
+ const {defaults,config}=await import('../runtime.js'),{apply}=await import('../host.js');const {scopeOf}=await import('../policy-scope.js');
+ fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replaySliceCalls:100,replayDailyCalls:10000,replayDailyTokens:100000000,replayFeedbackEnabled:false,replayHarvestEnabled:true,
   claudeEnabled:false,reviewEnabled:false,plannerEnabled:false,factCheckEnabled:false,
   aProvider:'fixture',aModel:'fixture-author',reviewBase:fakeBase,reviewKeyEnv:'LOCAL_HARVEST_REVIEW_KEY',retries:0}));
  fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:engine}));
@@ -136,7 +136,7 @@ test('authenticated production compression learns isolated synthetic cases, repl
 
   // Prevent the unrelated weekly schedule; this run must be caused specifically by admitting
   // a new learned case. The normal production endpoint still initiates the whole chain.
-  fs.writeFileSync(path.join(dir,'compression-policy.json'),JSON.stringify({...emptyPolicy(),lastAttempt:Date.now(),lastCompletedAt:Date.now(),manualBaselineAt:Date.now()-2*86400000}));
+  fs.writeFileSync(path.join(dir,'compression-policy.json'),JSON.stringify({...emptyPolicy(),baseline:{scope:scopeOf(config()),at:Date.now()-2*86400000,revision:0},lastAttempt:Date.now(),lastCompletedAt:Date.now(),manualBaselineAt:Date.now()-2*86400000}));
   await settings({replayFeedbackEnabled:true});phase='second';await compress('这是一段新的独立来源。');
   const replay=await until(()=>{
    if(!fs.existsSync(reportFile))return false;
