@@ -1,6 +1,6 @@
 {
   "name": "dsh-collaborative-compaction",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "packageManager": "npm@10.9.7",
   "main": "host.js",
