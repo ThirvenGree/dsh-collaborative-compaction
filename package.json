@@ -1,6 +1,6 @@
 {
   "name": "dsh-collaborative-compaction",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "type": "module",
   "main": "host.js",
   "exports": {
@@ -41,6 +41,9 @@
     "replay.js",
     "feedback.js",
     "proposal.js",
+    "harvest.js",
+    "harvest-runner.js",
+    "dynamic-bank.js",
     "challenge-bank.js",
     "examples/feedback-cases.json",
     "token-budget.js",

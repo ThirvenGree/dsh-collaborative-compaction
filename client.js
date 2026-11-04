@@ -359,6 +359,33 @@ function Runs({runs,notice,onRefresh}){
 }
 
 const replayLabels={'omitted-tool':'原工具名','later-correction':'后续更正','unconfirmed-click':'操作未确认','adequate-summary-control':'摘要充足对照','execution-error':'调用出错','baseline-inconclusive':'原文对照未通过','summary-sufficient':'摘要足够','retrieval-regression':'回查组退步','citation-recovered':'回查补齐引用','correct-answer-without-grounding':'行为正确但引文不足','recovered-by-recall':'回查恢复','did-not-search':'未发起回查','search-missed-evidence':'未查到关键依据','evidence-returned-answer-failed':'已查到依据但没有正确使用'};
+const harvestLabels={cancelled:'已取消',conflict:'题目隔离冲突',admitted:'样例审核通过',added:'已加入动态题库',duplicate:'已有对应样例',full:'题库已满',held:'暂未采用',clean:'未复现压缩遗漏',unavailable:'本次未完成',failed:'本次未完成',skipped:'本次未收集',queued:'等待后台处理',running:'正在检查',cleared:'已清空动态题库',interrupted:'上次处理已中断'};
+function HarvestBank({state,draft,set,onAction}){
+ const info=state?.replay?.harvest;
+ const current=info?info.running?'正在提炼和验证':info.enabled?'已开启，等待压缩结果':'已关闭':'尚未读取运行状态';
+ const entries=info?.entries||[];
+ const modelNames=models=>Array.isArray(models)?models.join(' / '):models&&typeof models==='object'?Object.values(models).filter(x=>typeof x==='string').join(' / '):typeof models==='string'?models:'—';
+ return h('section',{className:'dcc-group','aria-labelledby':'dcc-harvest-title'},
+  h('div',{className:'dcc-head'},h('h3',{id:'dcc-harvest-title'},'从实际遗漏更新回放题库'),
+   h('span',{className:'dcc-pill dcc-tone-'+(info?.running?'warn':info?.enabled?'ok':'neutral')},current)),
+  h('label',{className:'dcc-master'},h(Switch,{checked:!!draft.replayHarvestEnabled,label:'从正式压缩中提炼脱敏回放样例',onChange:v=>set('replayHarvestEnabled',v)}),'自动提炼脱敏样例'),
+  h('p',{className:'dcc-sub'},'在正式压缩得到候选摘要后，后台核对原文与摘要。确认遗漏后，模型改写为另一种虚构情境，独立审核脱敏程度、含义和答案，再验证原文、摘要与回查三路。回放自身不再产生新题。'),
+  h('div',{className:'dcc-meta'},
+   h('span',null,'已审核入库 ',h('b',null,info?.approvedCount??'—'),' 组'),
+   h('span',null,'队列 ',h('b',null,info?.queued??'—')),
+   h('span',null,'今日提炼 ',h('b',null,info?.today?info.today.attempts+' / '+info.today.limit:'—'))),
+  info?.last?h('p',{role:'status'},clock(info.last.at)+' · '+(harvestLabels[info.last.status]||info.last.status)+(info.last.reason?' · '+info.last.reason:'')):null,
+  info?.nextRetryAt>Date.now()?h('p',{className:'dcc-hint'},'恢复后最早再试：'+clock(info.nextRetryAt)):null,
+  h('p',null,'入库表示可以参加回放，不代表策略已经改变。新题库每 24 小时最多自动触发一次对照，其余新题合并到后续批次。仍需通过独立正例、边界反例和无退步检查。采用结果见上方“当前实际策略”。'),
+  h('details',{className:'dcc-more'},h('summary',null,'收集范围与保存方式'),
+   h('p',null,'只观察启用后的正式压缩，不扫描旧聊天目录。来源原文与原摘要只在本次后台任务内存中使用；本地题库保存审核通过的虚构样例、摘要指纹和模型信息，不保存正式聊天片段。'),
+   h('p',null,'原文会交给配置的模型进行临时核对，不给模型工具权限。程序检查敏感字面量和复制内容，并由独立模型复核；这些检查不能保证绝对匿名。'),
+   h('p',null,'超过 '+fmt(state?.config?.harvestSourceChars||120000)+' 字的来源会跳过，不截断后猜测。每日最多 '+(info?.today?.limit??4)+' 次提炼，最多暂存 2 项。题库最多保存 20 组，每次选取 2 组，优先覆盖尚未检查的样例。'),
+   h('p',null,'服务故障后至少等待 1 小时再试。关闭宿主会丢弃未完成的内存任务；已审核入库的样例仍保留。页面每 5 秒只读刷新。')),
+  entries.length?h('details',{className:'dcc-more'},h('summary',null,'已入库样例的审核记录（'+entries.length+'）'),
+   ...entries.map(entry=>h('p',{key:entry.id},clock(entry.createdAt)+' · '+entry.id+' · '+modelNames(entry.models)))):null,
+  h('button',{type:'button',className:'dcc-btn',disabled:!info||!info.approvedCount||info.running||state?.replay?.running,onClick:()=>onAction('clear-learned-cases')},'清空动态题库（保留当前策略）'));
+}
 function Panel(){
  const [state,setState]=R.useState(null),[draft,setDraft]=R.useState(null),[loadError,setLoadError]=R.useState('');
  const [tab,setTab]=R.useState('settings'),[saving,setSaving]=R.useState(false),[flash,setFlash]=R.useState(null);
@@ -414,7 +441,7 @@ function Panel(){
    h('p',{className:'dcc-lede'},state?.retrieval?.enabled===true?'大工具结果按需取回已配置。Anthropic / OpenAI Chat Completions 插件通道从 '+state.retrieval.minToolTokens+' tokens 起可保留原件，以 '+state.retrieval.tool+' 取回。Responses 浏览器任务通过 browser_progress 查看证据。':state?.retrieval?.enabled===false?'大工具结果按需取回未开启。':'大工具结果取回配置暂未读到。'),
    h('details',{className:'dcc-more'},h('summary',null,'三路回放与自动压缩策略'),
     h('label',{className:'dcc-master'},h(Switch,{checked:!!draft.replayFeedbackEnabled,label:'回放验证后自动应用压缩策略',onChange:v=>set('replayFeedbackEnabled',v)}),'回放验证后自动应用'),
-    h('p',null,'普通压缩成功后，每七天至多自动回放一次，也可手动运行。现行摘要复现遗漏后，模型可以提出未预设的新条款。新条款须经过独立审核，再用相同篇幅重新生成摘要，并通过独立正例、反例和无退步检查。'),
+    h('p',null,'普通压缩成功后，每七天至多自动回放一次；新样例入库另可触发对照，每 24 小时最多一次。也可手动运行。现行摘要复现遗漏后，模型可以提出未预设的新条款。新条款须经过独立审核，再用相同篇幅重新生成摘要，并通过独立正例、反例和无退步检查。'),
     h('p',null,'当前实际策略 v'+(state?.replay?.effectivePolicy?.version??0)+' · 预设条款 '+(state?.replay?.effectivePolicy?.rules?.length||0)+' 条 · 模型提出的条款 '+(state?.replay?.effectivePolicy?.clauses?.length||0)+' 条'),
     state?.replay?.effectivePolicy?.rules?.length?h('p',null,'预设条款 · '+state.replay.effectivePolicy.rules.join(' / ')):null,
     ...(state?.replay?.effectivePolicy?.clauses||[]).map(clause=>h('details',{className:'dcc-more',key:clause.id},h('summary',null,'新条款 · '+clause.when),
@@ -423,11 +450,12 @@ function Panel(){
     state?.replay?.policy?.last?h('p',null,clock(state.replay.policy.last.at)+' · '+state.replay.policy.last.reason+(state.replay.policy.last.clauseReviewer?' · 配置的审核模型 '+state.replay.policy.last.clauseReviewer:'')):null,
     state?.replay?.policy?.last?.before?h('details',null,h('summary',null,'查看旧策略与候选的逐项证据'),h('pre',{className:'dcc-raw'},JSON.stringify({before:state.replay.policy.last.before,after:state.replay.policy.last.after,gates:state.replay.policy.last.gates,proposed:state.replay.policy.last.proposed},null,2))):null,
     state?.replay?.policy?.previous?h('button',{className:'dcc-btn',disabled:state.replay.running,onClick:()=>replay('rollback-replay-policy')},'恢复上一策略'):null,
-    h('p',null,'可在本插件数据目录放置 feedback-cases.json 添加回放问题及独立留出题，格式见 README。样例会提交给配置的模型；页面刷新只读取结果。通过验证的条款从下一次压缩开始使用。'),
+    h('p',null,'动态题库会参与后续回放，也可在本插件数据目录放置 feedback-cases.json 添加问题及独立留出题，格式见 README。样例会提交给配置的模型；页面刷新只读取结果。通过验证的条款从下一次压缩开始使用。'),
     h('button',{className:'dcc-btn',disabled:!state?.config?.enabled||state?.replay?.running,onClick:()=>replay()},state?.replay?.running?'正在回放…':'运行三路回放'),
     state?.replay?.error?h('p',null,state.replay.error):null,
     state?.replay?.report?h('p',null,state.replay.report.provider+' / '+state.replay.report.model+' · '+clock(state.replay.report.at)):null,
-    ...(state?.replay?.report?.probes||[]).map(p=>h('p',{key:p.id},(replayLabels[p.id]||p.id)+' · '+(replayLabels[p.classification]||p.classification)+' · '+['full','summary','retrieval'].map((k,i)=>['原文','摘要','可回查'][i]+(p.lanes[k].pass?'通过':p.lanes[k].error?'出错':'未通过')).join(' / ')))),
+    ...(state?.replay?.report?.probes||[]).map(p=>h('p',{key:p.id},(replayLabels[p.id]||p.id)+' · '+(replayLabels[p.classification]||p.classification)+' · '+['full','summary','retrieval'].map((k,i)=>['原文','摘要','可回查'][i]+(p.lanes[k].pass?'通过':p.lanes[k].error?'出错':'未通过')).join(' / '))),
+    h(HarvestBank,{state,draft,set,onAction:replay})),
    h('div',{className:'dcc-tabs',role:'tablist'},
     h('button',{type:'button',role:'tab',id:'dcc-tab-settings','aria-selected':tab==='settings'?'true':'false','aria-controls':'dcc-panel-settings',className:'dcc-tab',onClick:()=>setTab('settings')},'设置',changes.length?h('span',{className:'dcc-count'},`${changes.length} 项未保存`):null),
     h('button',{type:'button',role:'tab',id:'dcc-tab-runs','aria-selected':tab==='runs'?'true':'false','aria-controls':'dcc-panel-runs',className:'dcc-tab',onClick:()=>setTab('runs')},'运行记录',failed?h('span',{className:'dcc-count dcc-tone-bad'},`${failed} 次失败`):null)),

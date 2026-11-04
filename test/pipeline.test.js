@@ -18,6 +18,22 @@ test('truncated Claude and Terra rejected even with text',async()=>{for(const en
 test('empty, oversized, cancelled and context overflow rejected',async()=>{assert.throws(()=>validateSummary('',work,c));assert.throws(()=>validateSummary('x'.repeat(201),work,c));const abort=new AbortController();abort.abort();await assert.rejects(runPipeline(work,async()=>result,{settings:c,signal:abort.signal,transport:transport([])}));await assert.rejects(runPipeline({...work,content:'x'.repeat(5000)},async()=>result,{settings:{...c,claudeContextTokens:4096},transport:transport([])}),/context budget/);});
 const {planCompression}=await import('../runtime.js');
 const structured=value=>async()=>({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(value)}]}],usage:{input_tokens:12,output_tokens:5}});
+
+test('production observer sees completed and fact-rejected candidates without storing them or blocking delivery',async()=>{
+ const source='保密来源只存在内存中：纸卡寄到前要先盖蓝章。',summary='纸卡会寄出。';
+ const w={content:source,instructions:'',maxSummaryChars:200,trigger:'tool'};
+ const settings={...c,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:false};
+ const observed=[];
+ assert.equal(await runPipeline(w,async()=>summary,{settings,onObservation:x=>{observed.push(x);return new Promise(()=>{});}}),summary);
+ assert.equal(observed.length,1);assert.equal(observed[0].summary,summary);assert.equal(observed[0].status,'validated');
+ assert.doesNotMatch(JSON.stringify(runs()),/保密来源只存在内存中|纸卡会寄出/);
+ await assert.rejects(runPipeline(w,async()=>summary,{settings:{...settings,factCheckEnabled:true},
+  transport:structured({approved:false,missingCritical:['先盖蓝章'],unsupported:[],facts:[]}),onObservation:x=>observed.push(x)}),/fact-check/);
+ assert.equal(observed.length,2);assert.equal(observed[1].status,'failed');
+ await assert.rejects(runPipeline({...w,content:'provider-error-only'},async()=>{throw Error('Provider offline');},{settings,onObservation:x=>observed.push(x)}));
+ assert.equal(observed.length,2,'provider outage without final summary cannot seed a case');
+ assert.equal(await runPipeline({...w,content:source+'新批'},async()=>summary,{settings,onObservation:()=>{throw Error('optional callback failed');}}),summary);
+});
 test('planner accepts wait and uncertain without ranges; rejects malformed now',async()=>{
  for(const decision of ['wait','uncertain'])assert.equal((await planCompression({candidates:[]},{settings:c,transport:structured({decision,reason:'not yet',ranges:[]})})).decision,decision);
  await assert.rejects(planCompression({}, {settings:c,transport:structured({decision:'now',reason:'bad',ranges:[]})}),/Invalid/);

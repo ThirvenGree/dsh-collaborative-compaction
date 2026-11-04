@@ -48,8 +48,9 @@ function checkCase(c,isProbe,seen){
   !keysOnly(c.requiredQuotes,c.requiredIds)||!c.requiredIds.every(id=>local.has(id)&&safe(c.requiredQuotes[id],180)&&local.get(id).includes(c.requiredQuotes[id])))
   throw Error('校准包每个必需引用都要能回到本题原文');
 }
-export function validateChallengeGroups(groups){
- if(!Array.isArray(groups)||groups.length>2)throw Error('额外校准包最多两组');
+export function validateChallengeGroups(groups,{maxGroups=2}={}){
+ if(!Number.isSafeInteger(maxGroups)||maxGroups<0||maxGroups>20)throw Error('校准组数量限制无效');
+ if(!Array.isArray(groups)||groups.length>maxGroups)throw Error('额外校准包超出本轮组数上限');
  const seen={ids:new Set(),questions:new Set(),texts:new Set()};
  for(const c of [...builtInGroups.flatMap(g=>[g.probe,g.positive,g.counter]),bankControl]){
   seen.ids.add(c.id);seen.questions.add(norm(c.question));for(const r of c.records){seen.ids.add(r.id);seen.texts.add(norm(r.text));}
@@ -92,7 +93,9 @@ export function citedSpans(text,records){
  return spans;
 }
 export function collectCases(extraGroups=[]){
- const groups=[...builtInGroups,...validateChallengeGroups(extraGroups)];
+ // Two operator-supplied groups and two admitted dynamic groups can be evaluated together.
+ // Persisted dynamic banks may be larger, but are rotated through bounded replay batches.
+ const groups=[...builtInGroups,...validateChallengeGroups(extraGroups,{maxGroups:4})];
  const diagnostics=[...groups.map(g=>({...g.probe,summaryCitations:citedSpans(g.probe.summary,g.probe.records)})),bankControl];
  return {groups,diagnostics,all:[...diagnostics,...groups.flatMap(g=>[g.positive,g.counter])]};
 }

@@ -11,3 +11,8 @@ config.json
 host.json
 local-token
 runs/
+/learned-replay-cases.json
+/harvest-status.json
+/feedback-cases.json
+/fixture-replay.json
+/compression-policy.json

@@ -32,7 +32,7 @@ const background=[
 ];
 export const validationCases=builtIns.all;
 export const diagnosticCases=builtIns.diagnostics;
-export const scopeOf=c=>createHash('sha256').update(JSON.stringify(Object.entries(c).filter(([k])=>k!=='replayFeedbackEnabled').sort(([a],[b])=>a.localeCompare(b)))).digest('hex');
+export const scopeOf=c=>createHash('sha256').update(JSON.stringify(Object.entries(c).filter(([k])=>!['replayFeedbackEnabled','replayHarvestEnabled'].includes(k)).sort(([a],[b])=>a.localeCompare(b)))).digest('hex');
 export const emptyPolicy=()=>({schema:1,revision:0,active:{version:0,rules:[],scope:null},previous:null,last:null,lease:null,lastAttempt:0});
 function checkedClauses(clauses=[]){
  if(!Array.isArray(clauses)||clauses.length>4)throw Error('Invalid learned compression policy');

@@ -1,5 +1,8 @@
 import {proposeClause} from './proposal.js';
-import {collectCases} from './challenge-bank.js';
+import {collectCases,validateChallengeGroups} from './challenge-bank.js';
+import {harvestCase} from './harvest.js';
+import {HarvestRunner,emptyHarvest,validateHarvestState} from './harvest-runner.js';
+import {loadDynamicBank,addDynamicCase,selectDynamicCases,markDynamicCasesTested,clearDynamicBank,dynamicBankFile} from './dynamic-bank.js';
 import {emptyPolicy,effectivePolicy,evaluateFeedback,scopeOf,withPolicy} from './feedback.js';
 import {replaySearch,runReplaySuite,screenMethod} from './replay.js';
 import {pathToFileURL} from 'node:url';
@@ -201,10 +204,10 @@ function reply(res,status,data){res.writeHead(status,{'content-type':'applicatio
 export function settingsAction(input){
  if(!input||typeof input!=='object'||Array.isArray(input))throw Error('Invalid settings request');
  if(!Object.hasOwn(input,'action'))return 'save';
- if(input.action==='rollback-replay-policy'||input.action==='run-fixture-replay')return input.action;
+ if(['rollback-replay-policy','run-fixture-replay','clear-learned-cases'].includes(input.action))return input.action;
  throw Error('Unknown settings action');
 }
-// Only operator-supplied replay examples from this profile may extend the diagnostic bank.
+// Operator examples remain separate from independently reviewed synthetic examples learned at runtime.
 export function loadChallengeBank(root){
  const file=path.join(root,'feedback-cases.json');
  let fd;
@@ -224,6 +227,7 @@ export function loadChallengeBank(root){
   let bank;
   try{bank=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(data));}catch{throw Error('feedback-cases.json 不是有效的 UTF-8 JSON');}
   if(bank?.schema!==1||!Array.isArray(bank.groups))throw Error('feedback-cases.json 须包含 schema 1 和 groups 数组');
+  validateChallengeGroups(bank.groups);
   return {groups:bank.groups,digest:createHash('sha256').update(data).digest('hex')};
  }finally{fs.closeSync(fd);}
 }
@@ -235,6 +239,8 @@ export function apply(ctx){
  let replayJob=null,replayError='',disposed=false;
  const replayFile=path.join(dataRoot,'fixture-replay.json');
  const policyFile=path.join(dataRoot,'compression-policy.json');
+ const harvestFile=path.join(dataRoot,'harvest-status.json');
+ const learnedFile=path.join(dataRoot,dynamicBankFile);
  const hostId=randomUUID();
  const week=7*86400000;
  function policyState(){return fs.existsSync(policyFile)?read(policyFile):emptyPolicy();}
@@ -249,7 +255,37 @@ export function apply(ctx){
   const c=config(),state={running:!!replayJob,error:replayError,policy:null,effectivePolicy:emptyPolicy().active,report:null};
   try{state.policy=policyState();if(c.enabled&&c.replayFeedbackEnabled)state.effectivePolicy=effectivePolicy(state.policy,scopeOf(c));
    if(fs.existsSync(replayFile))state.report=read(replayFile);}catch{state.error='无法读取策略或回放记录，正式压缩使用可核验的策略或基础策略。';}
+  try{const bank=loadDynamicBank(dataRoot);state.harvest={...harvester.status(),approvedCount:bank.entries.length,
+   entries:bank.entries.map(({id,createdAt,models})=>({id,createdAt,models}))};}
+  catch{state.harvest={enabled:false,running:false,queued:0,approvedCount:0,last:{status:'unavailable',at:Date.now(),reason:'动态题库或学习状态无法读取；已暂停自动学习。'}};}
   return state;
+ }
+ const harvester=new HarvestRunner({config,
+  read:()=>fs.existsSync(harvestFile)?validateHarvestState(read(harvestFile)):emptyHarvest(),
+  mutate:change=>serialized(()=>kernelLock(harvestFile,()=>{
+   if(disposed)return null;
+   const old=fs.existsSync(harvestFile)?validateHarvestState(read(harvestFile)):emptyHarvest(),next=change(old);
+   if(next)write(harvestFile,next);return next;
+  })),
+  process:(item,c,signal)=>{
+   if(loadDynamicBank(dataRoot).entries.length>=20)return {status:'full'};
+   return replayCall(options=>harvestCase({...item,...options,
+    review:(system,input)=>reviewProposedClause(system,input,c,options.signal)}),signal,c);
+  },
+  admit:(value,valid)=>serialized(()=>kernelLock(harvestFile,()=>kernelLock(learnedFile,()=>{
+   const lease=fs.existsSync(harvestFile)?validateHarvestState(read(harvestFile)).lease:null;
+   if(disposed||!valid()||lease?.id!==value.claimId||lease.until<=Date.now())return {status:'cancelled'};
+   return addDynamicCase(dataRoot,{group:value.group,sourceHash:value.sourceHash,summaryHash:value.summaryHash,models:value.models});
+  }))),
+  onAdmit:()=>{void maybeLearnedReplay();}
+ });
+ async function maybeLearnedReplay(){
+  try{
+   const c=config();if(disposed||!c.enabled||!c.replayFeedbackEnabled||replayJob)return;
+   if(!loadDynamicBank(dataRoot).entries.some(e=>!e.testedAt))return;
+   const state=policyState();if(Date.now()-(state.lastLearnedAttempt||0)<86400000)return;
+   await startFixture('learned');
+  }catch{replayError='自动题库回放暂未完成，可在设置页重试；现行策略不变。';}
  }
  async function replayOptions(signal,c){
   if(!c.enabled)throw Error('请先启用协作压缩');
@@ -284,17 +320,20 @@ export function apply(ctx){
     const now=Date.now();
     if(old.lease&&now<old.lease.until)throw Error('另一个回放正在验证策略');
     if(origin==='auto'&&now-old.lastAttempt<week)return null;
-    return {...old,lastAttempt:now,lease:{id,hostId,revision:old.revision,scope,origin,until:now+660000}};
+    if(origin==='learned'&&now-(old.lastLearnedAttempt||0)<86400000)return null;
+    return {...old,lastAttempt:now,...(origin==='learned'?{lastLearnedAttempt:now}:{}),lease:{id,hostId,revision:old.revision,scope,origin,until:now+660000}};
    });
    if(!claim)return;
   }else if(origin==='auto')return;
-  let bank,diagnostic,feedback={status:'disabled',reason:'策略调整已关闭。'};
+  let bank,learned,diagnostic,feedback={status:'disabled',reason:'策略调整已关闭。'};
   try{
    await replayCall(async options=>{
     bank=loadChallengeBank(dataRoot);
-    const {diagnostics}=collectCases(bank.groups);
+    learned=selectDynamicCases(dataRoot,{manualGroups:bank.groups});
+    const groups=[...bank.groups,...learned.groups];
+    const {diagnostics}=collectCases(groups);
     diagnostic=await runReplaySuite({...options,cases:diagnostics});
-    if(claim)feedback=await evaluateFeedback({diagnostic,active:effectivePolicy(claim,scope),nextVersion:claim.revision+1,options,challengeGroups:bank.groups,
+    if(claim)feedback=await evaluateFeedback({diagnostic,active:effectivePolicy(claim,scope),nextVersion:claim.revision+1,options,challengeGroups:groups,
       propose:({failures,active})=>proposeClause({failures,active,generate:options.generate,
         review:(system,input)=>reviewProposedClause(system,input,c,options.signal),
         provider:options.provider,model:options.model,signal:options.signal}),
@@ -311,11 +350,11 @@ export function apply(ctx){
     const latest=config();
     if(!latest.replayFeedbackEnabled||scopeOf(latest)!==scope||Date.now()>=old.lease.until)feedback={status:'held',reason:'验证期间配置改变或租约过期，保留当前策略。'};
     if(feedback.status==='promoted'){
-     try{if(!bank||loadChallengeBank(dataRoot).digest!==bank.digest)throw Error('样例包已改变');}
+     try{if(!bank||loadChallengeBank(dataRoot).digest!==bank.digest||selectDynamicCases(dataRoot,{manualGroups:bank.groups}).digest!==learned?.digest)throw Error('样例包已改变');}
      catch{feedback={status:'held',reason:'验证期间回放样例包改变或已不可读，请用新样例重新验证。'};}
     }
     const {candidate,...proof}=feedback;
-    const last={...proof,origin,at:Date.now(),challengeSets:bank?.groups.length??0,bankDigest:bank?.digest??null,proposer:c.aProvider+'/'+c.aModel,clauseReviewer:c.reviewModel,from:effectivePolicy(old,scope).version};
+    const last={...proof,origin,at:Date.now(),challengeSets:(bank?.groups.length??0)+(learned?.groups.length??0),learnedIds:learned?.ids??[],learnedDigest:learned?.digest??null,bankDigest:bank?.digest??null,proposer:c.aProvider+'/'+c.aModel,clauseReviewer:c.reviewModel,from:effectivePolicy(old,scope).version};
     if(!!candidate&&feedback.status==='promoted')return {...old,revision:old.revision+1,previous:effectivePolicy(old,scope),active:{...candidate,proof:last},last,lease:null};
     return {...old,last,lease:null};
    });
@@ -323,6 +362,10 @@ export function apply(ctx){
   }
   if(disposed)throw Error('回放随插件退出而取消');
   if(!diagnostic)throw Error(feedback.reason);
+  if(learned?.ids.length&&feedback.status!=='unavailable')await serialized(()=>kernelLock(learnedFile,()=>{
+   if(!disposed&&selectDynamicCases(dataRoot,{manualGroups:bank.groups}).digest===learned.digest)markDynamicCasesTested(dataRoot,learned.ids);
+  }));
+  if(disposed)throw Error('回放随插件退出而取消');
   const report={...diagnostic,at:Date.now(),suite:'open-replay-v2',feedback};
   write(replayFile,report);return report;
  }
@@ -336,9 +379,9 @@ export function apply(ctx){
    return {...old,revision:old.revision+1,active:old.previous,previous:null,lease:null,lastAttempt:Date.now(),last:{status:'rolled-back',from:version,at:Date.now(),reason:'已恢复上一已验证版本。'}};
   });
  }
- function summarize(work,c,signal,policy){
+ function summarize(work,c,signal,policy,onObservation){
   const input=withPolicy(work,policy);
-  return runPipeline(input,sig=>generateA(input,sig,c),{signal,settings:c});
+  return runPipeline(input,sig=>generateA(input,sig,c),{signal,settings:c,onObservation});
  }
  ctx.provide?.('censhuReplay',{screenMethod:(input,{signal}={})=>replayCall(options=>screenMethod(input,options),signal)});
  async function generateA(work,signal,c){
@@ -369,18 +412,30 @@ export function apply(ctx){
     try{const current=policyState();policy=effectivePolicy(current,scopeOf(c));lastAttempt=current.lastAttempt;}
     catch{replayError='策略记录无效，继续使用基础压缩策略。';}
    }
-   const summary=await summarize(work,c,abort.signal,policy);reply(res,200,{choices:[{message:{role:'assistant',content:summary},finish_reason:'stop'}]});
+   const summary=await summarize(work,c,abort.signal,policy,observation=>{
+    if(disposed||!c.replayHarvestEnabled)return;
+    harvester.enqueue({content:work.content,summary:observation.summary,trigger:work.trigger,
+     eligible:payload.metadata.dsh_compaction.replayLearning!=='exclude'});
+   });reply(res,200,{choices:[{message:{role:'assistant',content:summary},finish_reason:'stop'}]});
    if(!disposed&&c.replayFeedbackEnabled&&!replayJob&&lastAttempt!==null&&Date.now()-lastAttempt>=week)void startFixture('auto').catch(()=>{});
   }catch(e){reply(res,422,{error:String(e.message).slice(0,250)});}finally{pending.delete(abort);}
  });
  server.on('error',e=>{health='listener failed: '+e.code;});
  server.listen(0,'127.0.0.1',async()=>{port=server.address().port;listeners.set(port,token);try{await syncEngine(config,port,token);ready();}catch(e){health='engine config failed: '+e.message;}});
- ctx.effect(()=>async()=>{disposed=true;for(const c of pending)c.abort(Error("Host stopping"));
+ const learningTimer=setInterval(()=>{void harvester.pump();void maybeLearnedReplay();},60000);learningTimer.unref?.();
+ ctx.effect(()=>async()=>{disposed=true;clearInterval(learningTimer);harvester.dispose();for(const c of pending)c.abort(Error("Host stopping"));
   try{await changePolicy(s=>s.lease?.hostId===hostId?{...s,lease:null}:null);}catch{}listeners.delete(port);server.close();try{await syncEngine(()=>({...config(),enabled:false}),port,token,validateEngine,true);}catch{}});
  ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/state',handler:async(req,res)=>{
   const host=req.headers.host||'',origin=req.headers.origin;
   if(!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)||Number(host.slice(host.lastIndexOf(':')+1))!==req.socket.localPort||req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==`http://${host}`)){reply(res,403,{error:'Forbidden'});return;}
-  try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}const input=await body(req),action=settingsAction(input);if(!port)throw Error("Listener not ready");if(action==='run-fixture-replay'){void startFixture().catch(()=>{});}else if(action==='rollback-replay-policy'){await rollback(input.version);}else{await saveSettings(input.changes??input,port,token,validateEngine,input.expected);ready();}}else if(req.method!=='GET'){reply(res,405,{});return;}
+  try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}const input=await body(req),action=settingsAction(input);if(!port)throw Error("Listener not ready");if(action==='run-fixture-replay'){void startFixture().catch(()=>{});}else if(action==='rollback-replay-policy'){await rollback(input.version);}else if(action==='clear-learned-cases'){
+     if(replayJob||harvester.running)throw Error('请等待正在运行的学习或回放结束后再清空');
+     await serialized(()=>kernelLock(learnedFile,()=>{
+      if(disposed||replayJob||harvester.running||policyState().lease?.until>Date.now())throw Error('回放状态已变化，请刷新');
+      if(fs.existsSync(harvestFile)&&read(harvestFile).lease?.until>Date.now())throw Error('另一个实例正在学习，请稍后再清空');
+      clearDynamicBank(dataRoot);
+     }));
+    }else{await saveSettings(input.changes??input,port,token,validateEngine,input.expected);if(!config().enabled||!config().replayHarvestEnabled)await harvester.cancel();ready();}}else if(req.method!=='GET'){reply(res,405,{});return;}
    reply(res,200,{config:config(),csrf,health,replay:replayState(),retrieval:retrievalPolicy(),runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
   }catch(e){reply(res,400,{error:e.message});}
  }}));

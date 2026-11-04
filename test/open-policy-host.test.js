@@ -42,7 +42,7 @@ test('newly reported evidence dependency can become a scoped production strategy
  assign(vars);const originalFetch=globalThis.fetch;
  t.after(()=>{globalThis.fetch=originalFetch;assign(original);fs.rmSync(dir,{recursive:true,force:true});});
  const {defaults}=await import('../runtime.js'),{apply}=await import('../host.js');
- fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,claudeEnabled:false,reviewEnabled:false,plannerEnabled:false,
+ fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replayHarvestEnabled:false,claudeEnabled:false,reviewEnabled:false,plannerEnabled:false,
   factCheckEnabled:false,aProvider:'fixture',aModel:'fixture-dsh',reviewBase:apiBase,reviewKeyEnv:'LOCAL_FAKE_POLICY_TOKEN',retries:0}));
  fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:engine}));
  const bankFile=path.join(dir,'feedback-cases.json');

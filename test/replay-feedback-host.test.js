@@ -29,7 +29,7 @@ test('ordinary compression triggers calibration; the next request and restarted 
  };
  t.after(()=>{globalThis.fetch=nativeFetch;});
  const {defaults}=await import('../runtime.js'),{apply}=await import('../host.js');
- fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:false,aProvider:'test',aModel:'fixture',reviewBase:'https://policy-review.invalid/v1',reviewKeyEnv:'LOCAL_REPLAY_TEST_KEY'}));
+ fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({...defaults,enabled:true,replayHarvestEnabled:false,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:false,aProvider:'test',aModel:'fixture',reviewBase:'https://policy-review.invalid/v1',reviewKeyEnv:'LOCAL_REPLAY_TEST_KEY'}));
  fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:engine}));
  const seen=[];
  async function* stream(req){
