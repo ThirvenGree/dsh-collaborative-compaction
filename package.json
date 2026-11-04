@@ -1,6 +1,6 @@
 {
   "name": "dsh-collaborative-compaction",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "type": "module",
   "packageManager": "npm@10.9.7",
   "main": "host.js",
@@ -64,7 +64,8 @@
     "live-test.mjs",
     "replay-live.mjs",
     "replay-checkpoint.js",
-    "calibration-budget.js"
+    "calibration-budget.js",
+    "semantic-host.js"
   ],
   "dependencies": {
     "js-tiktoken": "1.0.21"

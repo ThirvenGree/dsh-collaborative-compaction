@@ -10,13 +10,14 @@ import {scopeStatus,scopeSnapshot,migrateLegacyScope} from './policy-scope.js';
 import {automaticSchedule,settleSchedule} from './replay-schedule.js';
 import {replaySearch,runReplaySuite,screenMethod} from './replay.js';
 import {pathToFileURL} from 'node:url';
+import {createSemanticSettings,localSettingsRequest} from './semantic-host.js';
 import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {randomUUID,timingSafeEqual,randomBytes,createHash} from 'node:crypto';
-import {config,validateConfig,dataRoot,defaultRoot,activeProfile,migrateProfile,recoverRuns,runs,runPipeline,planCompression,reviewProposedClause} from './runtime.js';
+import {config,validateConfig,dataRoot,defaultRoot,activeProfile,migrateProfile,recoverRuns,runs,runPipeline,planCompression,reviewProposedClause,getKey} from './runtime.js';
 export const name='collaborative-compaction';
 export const inject=['webServer','llm'];
 const route='/dsh-collaborative-compaction';
@@ -24,8 +25,8 @@ const listeners=new Map();
 export function engineConfigFile(){return process.env.BILI_CONFIG_FILE?path.resolve(process.env.BILI_CONFIG_FILE):path.join(process.env.XDG_CONFIG_HOME?path.resolve(process.env.XDG_CONFIG_HOME):path.join(os.homedir(),'.config'),'billion-context','billion-context.json');}
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 function write(p,v){fs.mkdirSync(path.dirname(p),{recursive:true});const t=p+'.'+randomUUID()+'.tmp';try{fs.writeFileSync(t,JSON.stringify(v,null,2),{mode:0o600});fs.renameSync(t,p);}finally{fs.rmSync(t,{force:true});}}
-async function loadEngineExports() {
- const relative=path.join('dist','external-summary-settings.js');
+async function loadEngineExports(entry='external-summary-settings.js') {
+ const relative=path.join('dist',entry);
  const profile=activeProfile || process.env.DSH_PROFILE_DIR || process.argv.find(arg=>path.isAbsolute(arg)&&fs.existsSync(path.join(arg,'node_modules','billion-context',relative)));
  const marker=path.join(dataRoot,'installed-engine.json');
  const root=profile?path.join(profile,'node_modules','billion-context'):fs.existsSync(marker)?read(marker).enginePath:path.join(process.env.DSH_HOME||path.join(os.homedir(),'.dsh'),'profiles','desktop','node_modules','billion-context');
@@ -236,6 +237,7 @@ export function loadChallengeBank(root){
  }finally{fs.closeSync(fd);}
 }
 export function apply(ctx){
+ const semanticSettings=createSemanticSettings({loadEngine:()=>loadEngineExports('semantic-settings.js'),keyAvailable:async name=>!!(await getKey(name)),lock:kernelLock});
  migrateProfile();
  fs.mkdirSync(dataRoot,{recursive:true});let token;const tokenFile=path.join(dataRoot,'local-token');if(fs.existsSync(tokenFile))token=fs.readFileSync(tokenFile,'utf8');else{token=randomBytes(32).toString('hex');fs.writeFileSync(tokenFile,token,{mode:0o600});}
  recoverRuns();
@@ -524,6 +526,15 @@ export function apply(ctx){
  const learningTimer=setInterval(()=>{void harvester.pump();void maybeLearnedReplay();},60000);learningTimer.unref?.();
  ctx.effect(()=>async()=>{disposed=true;clearInterval(learningTimer);harvester.dispose();for(const c of pending)c.abort(Error("Host stopping"));
   try{await changePolicy(s=>s.lease?.hostId===hostId?{...s,lease:null}:null);}catch{}listeners.delete(port);server.close();try{await syncEngine(()=>({...config(),enabled:false}),port,token,validateEngine,true);}catch{}});
+ ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/semantic',handler:async(req,res)=>{
+  if(!localSettingsRequest(req)){reply(res,403,{error:'Forbidden'});return;}
+  try{
+   if(req.method==='GET'){reply(res,200,{...(await semanticSettings.snapshot()),csrf});return;}
+   if(req.method!=='POST'){reply(res,405,{});return;}
+   if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}
+   reply(res,200,{...(await semanticSettings.update(await body(req,100000))),csrf});
+  }catch(error){reply(res,400,{error:String(error.message).replace(/(?:sk-|AIza)[\w-]+/g,'[redacted]').slice(0,400)});}
+ }}));
  ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/state',handler:async(req,res)=>{
   const host=req.headers.host||'',origin=req.headers.origin;
   if(!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)||Number(host.slice(host.lastIndexOf(':')+1))!==req.socket.localPort||req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==`http://${host}`)){reply(res,403,{error:'Forbidden'});return;}

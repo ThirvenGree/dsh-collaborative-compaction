@@ -592,7 +592,77 @@ function tabBadge(keys,changes,errors){
 }
 const SETTINGS_KEYS=new Set(GROUPS.filter(g=>!g.tab).flatMap(g=>g.fields.map(([k])=>k)));
 const LEARNING_KEYS=new Set([...GROUPS.filter(g=>g.tab==='learning').flatMap(g=>g.fields.map(([k])=>k)),'replayFeedbackEnabled','replayHarvestEnabled']);
-const TABS=[['settings','设置'],['learning','学习与校准'],['runs','运行记录']];
+const TABS=[['settings','设置'],['semantic','语义与媒体检索'],['learning','学习与校准'],['runs','运行记录']];
+const SEMANTIC_FIELDS=[
+ ['model','向量模型','text'],['dimensions','向量维度','dimensions'],['keyEnv','密钥环境变量名','text'],
+ ['relevanceModel','证据重排模型','text'],['requestTimeoutMs','单次请求超时 / 毫秒','number'],
+ ['queryTimeoutMs','单次检索等待 / 毫秒','number'],['relevanceTimeoutMs','重排超时 / 毫秒','number'],
+ ['maxRequestsPerMinute','每分钟请求预算','number'],['maxDailyRequests','每日请求预算','number'],
+ ['concurrency','后台并发','number'],['retries','网络重试','number'],['maxProbes','第二跳最多线索数','number'],
+ ['chunkChars','连续事件片段字数预算','number'],['candidateLimit','每路候选数','number'],['rrfK','融合排序参数','number'],
+ ['ffmpegPath','FFmpeg 路径（留空使用 PATH）','text'],['ffprobePath','FFprobe 路径（留空使用 PATH）','text'],
+ ['allowedMediaRoots','允许读取的媒体目录，每行一个','array'],['selectedSessions','后台索引会话 ID，每行一个','array'],
+ ['mediaMaxBytes','单个媒体文件字节上限','number'],['mediaMaxPages','每批 PDF 页数预算','number'],['mediaMaxSeconds','每段音视频时长预算 / 秒','number']
+];
+const SEMANTIC_BOOL=[['enabled','启用语义召回'],['mediaEnabled','处理图片、音频、视频和 PDF'],['relevanceEnabled','按需核对语义证据'],['secondHopEnabled','证据不足时允许第二跳检索']];
+function Semantic({active}){
+ const [value,setValue]=R.useState(null),[draft,setDraft]=R.useState(null),[error,setError]=R.useState(''),[busy,setBusy]=R.useState(false),[notice,setNotice]=R.useState('');
+ const saved=R.useRef(null),edited=R.useRef(null),sequence=R.useRef(0),working=R.useRef(false);edited.current=draft;
+ const convert=c=>Object.fromEntries(Object.entries(c||{}).map(([k,v])=>[k,Array.isArray(v)?v.join('\n'):typeof v==='number'?String(v):v]));
+ const differs=(a,b)=>JSON.stringify(a)!==JSON.stringify(b);
+ async function refresh(){
+  if(working.current)return;const id=++sequence.current;
+  try{
+   const response=await fetch('/dsh-collaborative-compaction/semantic',{cache:'no-store'}),data=await response.json();
+   if(!response.ok)throw Error(data.error||'读取失败');if(id!==sequence.current)return;
+   setValue(data);setError('');
+   if(data.config){
+    const next=convert(data.config),before=saved.current,current=edited.current;
+    const changes=current&&before?Object.keys(current).filter(k=>differs(current[k],before[k])):[];
+    setDraft({...next,...Object.fromEntries(changes.map(k=>[k,current[k]]))});saved.current=next;
+   }
+  }catch(e){if(id===sequence.current)setError(e.message);}
+ }
+ R.useEffect(()=>{if(!active)return;refresh();const timer=setInterval(refresh,5000);return()=>{clearInterval(timer);sequence.current++;};},[active]);
+ const set=(key,newValue)=>{setDraft(old=>({...old,[key]:newValue}));setNotice('');};
+ const changes=draft&&saved.current?Object.keys(draft).filter(k=>differs(draft[k],saved.current[k])):[];
+ async function mutate(action){
+  if(!value||working.current)return;working.current=true;setBusy(true);setError('');sequence.current++;
+  const sent={...draft};
+  try{
+   const fields=Object.fromEntries(SEMANTIC_FIELDS.map(([k,,type])=>[k,type]));
+   const update=Object.fromEntries(changes.map(k=>[k,fields[k]==='array'?String(sent[k]).split(/\r?\n/).map(s=>s.trim()).filter(Boolean):fields[k]==='number'||fields[k]==='dimensions'?Number(sent[k]):sent[k]]));
+   const response=await fetch('/dsh-collaborative-compaction/semantic',{method:'POST',headers:{'content-type':'application/json','x-dsh-compaction-csrf':value.csrf},body:JSON.stringify(action==='save'?{action,revision:value.revision,changes:update}:{action,instance:value.status?.instance})});
+   const next=await response.json();if(!response.ok)throw Error(next.error||'操作失败');setValue(next);
+   if(action==='save'&&next.config){const base=convert(next.config);saved.current=base;setDraft(current=>({...base,...Object.fromEntries(Object.keys(current||{}).filter(k=>differs(current[k],sent[k])).map(k=>[k,current[k]]))}));}
+   setNotice(action==='save'?'语义检索设置已保存；后续任务读取新设置。':'请求已登记，等待索引工作线程回执。刷新可查看实际状态。');
+  }catch(e){setError(e.message);}
+  finally{working.current=false;setBusy(false);}
+ }
+ const status=value?.status,stale=status?.updatedAt&&Date.now()-status.updatedAt>120000;
+ const flag=!value?.config?'等待引擎':!value.config.enabled?'未启用':status?.paused?'已暂停':stale?'最近状态已过期':status?.running?'后台运行中':'等待检索任务';
+ const phase=status?.phase||'尚无任务';
+ const per=status?.modalities??status?.perModality??{};
+ return h('div',{className:'dcc-semantic'},
+  h('section',{className:'dcc-group'},h('div',{className:'dcc-head'},h('div',null,h('h3',null,'精确搜索与多模态回忆'),h('p',{className:'dcc-lede'},'原文继续留在本机；Gemini Embedding 2 为授权资料生成语义向量，再与 SQLite FTS5 融合。')),h('span',{className:'dcc-pill dcc-tone-'+(error||value?.health?'warn':'ok')},flag)),
+   h('p',null,value?.notice||'正在读取语义索引设置…'),
+   h('div',{className:'dcc-actions'},h('button',{className:'dcc-btn',type:'button',disabled:busy,onClick:refresh},'刷新状态'),...['pause','resume','retry','rebuild'].map((action,i)=>h('button',{className:'dcc-btn',type:'button',key:action,disabled:busy||!status,onClick:()=>mutate(action)},['暂停队列','恢复处理','重试失败项','重建派生索引'][i]))),
+   error||value?.health?h('p',{className:'dcc-flash dcc-tone-warn',role:'alert'},error||value.health):null,
+   notice?h('p',{className:'dcc-flash dcc-tone-ok',role:'status'},notice):null),
+  h('section',{className:'dcc-group'},h('h3',null,'本机索引进度'),
+   h('dl',{className:'dcc-dl'},h('dt',null,'当前阶段'),h('dd',null,phase),h('dt',null,'索引 / 待处理 / 失败'),h('dd',null,`${status?.indexed??0} / ${status?.pending??0} / ${status?.failed??0}`),
+    h('dt',null,'今日请求 / token'),h('dd',null,`${status?.requestsToday??0} / ${status?.tokensToday??0}`),h('dt',null,'密钥'),h('dd',null,value?.keyConfigured?'环境变量已配置':'环境变量尚未就绪'),
+    h('dt',null,'最后成功'),h('dd',null,status?.lastSuccessAt?clock(status.lastSuccessAt):'尚无成功记录'),h('dt',null,'状态更新时间'),h('dd',null,status?.updatedAt?clock(status.updatedAt):'尚未生成'),
+    h('dt',null,'来源变更拒绝数'),h('dd',null,status?.rejectedStale??0)),
+   h('div',{style:{overflowX:'auto'}},h('table',{className:'dcc-table'},h('thead',null,h('tr',null,...['内容','已索引','待处理','失败'].map(x=>h('th',{key:x},x)))),h('tbody',null,...[['text','文本经历'],['image','图片原件'],['audio','音频片段'],['video','视频画面'],['pdf','PDF 页面']].map(([key,label])=>h('tr',{key},h('td',null,label),h('td',null,per[key]?.indexed??'—'),h('td',null,per[key]?.pending??'—'),h('td',null,per[key]?.failed??'—')))))),
+   h('p',{className:'dcc-hint'},'视频画面与音轨分别处理，回读保留时间位置；PDF 保留页码。缺少原件、缺少媒体工具或处理失败不会显示为已索引。未索引完时，搜索会明确标示覆盖不完整。'),
+   status?.lastQuery?h('details',{className:'dcc-more',open:true},h('summary',null,'最近一次检索如何完成'),h('pre',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},JSON.stringify(status.lastQuery,null,2))):null),
+  draft?h('section',{className:'dcc-group'},h('h3',null,'语义检索设置'),h('p',{className:'dcc-hint'},'与协作压缩的总开关独立。模型或维度改变后使用独立的新一代向量，不混用旧向量。会话列表为空时，只在 search_context 明确选定目标后索引该会话。'),
+   ...SEMANTIC_BOOL.filter(([key])=>key in draft).map(([key,label])=>h('label',{key,className:'dcc-master',style:{marginBottom:12}},h(Switch,{checked:draft[key],label,onChange:v=>set(key,v)}),label)),
+   h('div',{className:'dcc-fields'},...SEMANTIC_FIELDS.filter(([key])=>key in draft).map(([key,label,type])=>h('label',{className:'dcc-field',key,style:{display:'flex',flexDirection:'column',gap:5,marginBottom:14}},h('span',null,label),type==='array'?h('textarea',{rows:3,value:draft[key],onChange:e=>set(key,e.target.value),style:{font:'inherit'}}):type==='dimensions'?h('select',{value:draft[key],onChange:e=>set(key,e.target.value)},...[768,1536,3072].map(n=>h('option',{key:n,value:n},n))):h('input',{type:type==='number'?'number':'text',value:draft[key],onChange:e=>set(key,e.target.value),style:{font:'inherit',minWidth:0}})))),
+   h('p',{className:'dcc-hint'},'媒体目录只用于已与消息关联的文件，不会遍历整个目录。请求预算、并发和超时是程序的资源保护；资料选择、证据核对与第二跳仍可由模型决定。'),
+   h('div',{className:'dcc-actions'},h('button',{type:'button',className:'dcc-btn dcc-btn-primary',disabled:busy||!changes.length,onClick:()=>mutate('save')},busy?'正在处理…':`保存语义设置${changes.length?'（'+changes.length+' 项）':''}`))):null);
+}
 function Panel(){
  const [state,setState]=R.useState(null),[draft,setDraft]=R.useState(null),[loadError,setLoadError]=R.useState('');
  const [tab,setTab]=R.useState('settings'),[saving,setSaving]=R.useState(false),[flash,setFlash]=R.useState(null);
@@ -656,6 +726,7 @@ function Panel(){
      }},title,badge);
    })),
    h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-settings','aria-labelledby':'dcc-tab-settings',hidden:tab!=='settings'},h(Settings,{draft,base,set,retrieval:state?.retrieval})),
+   h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-semantic','aria-labelledby':'dcc-tab-semantic',hidden:tab!=='semantic'},h(Semantic,{active:tab==='semantic'})),
    h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-learning','aria-labelledby':'dcc-tab-learning',hidden:tab!=='learning'},h(Learning,{state,draft,base,set,onAction:replay})),
    h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-runs','aria-labelledby':'dcc-tab-runs',hidden:tab!=='runs'},h(Runs,{runs,notice:state?.notice,onRefresh:refresh})),
    flash&&!changes.length?h('div',{className:'dcc-flash dcc-tone-'+flash.tone,role:'status'},flash.text):null,
