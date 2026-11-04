@@ -2431,10 +2431,10 @@ index 0000000000000000000000000000000000000000..7407b307be7801fbb97045e18f0313f8
 +}
 diff --git a/src/semantic/engine.ts b/src/semantic/engine.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..20994da3d2b01e8c7f7bf1cb3c1ae88ebac2e4de
+index 0000000000000000000000000000000000000000..7e3c9b1bc78fe40b96899d081bec72ffa3f49fb6
 --- /dev/null
 +++ b/src/semantic/engine.ts
-@@ -0,0 +1,470 @@
+@@ -0,0 +1,473 @@
 +import { DatabaseSync } from "node:sqlite";
 +import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 +import path from "node:path";
@@ -2646,6 +2646,9 @@ index 0000000000000000000000000000000000000000..20994da3d2b01e8c7f7bf1cb3c1ae88e
 +                }
 +            }
 +            this.setMeta("paused", JSON.stringify(this.paused)); this.setMeta("control/" + name, command.id);
++            // Acknowledged operator controls should be visible immediately; the
++            // normal idle heartbeat remains throttled to one write every 5 s.
++            this.status();
 +        }
 +    }
 +    /** Bounded batches commit before yielding; provider promises never hold a DB transaction. */
@@ -8598,10 +8601,10 @@ index ea5bac1e3077c61ce649a701ec096ecb8570dc40..f64b980e18d798bb3a746c7e12f84e2d
      assert.notEqual(on, off, "flagged ctx → re-ranked output");
 diff --git a/tests/semantic-dist-smoke.test.ts b/tests/semantic-dist-smoke.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..99ab6f8a39388214de433d41e0dd24dcf949dd0e
+index 0000000000000000000000000000000000000000..fee5e95e0c3c7d56006b40b5103b8d1caf5d14c7
 --- /dev/null
 +++ b/tests/semantic-dist-smoke.test.ts
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,104 @@
 +import test from "node:test";
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
@@ -8650,7 +8653,7 @@ index 0000000000000000000000000000000000000000..99ab6f8a39388214de433d41e0dd24dc
 +    child.stdout.on("data", chunk => { output += String(chunk); }); child.stderr.on("data", chunk => { output += String(chunk); });
 +    const logFile = path.join(dir, "state", "billion-context", "bili.log"), semanticDir = path.join(dir, "semantic-search");
 +    const statuses = () => fs.existsSync(semanticDir) ? fs.readdirSync(semanticDir).filter(name => name.endsWith(".status.json")).flatMap(name => {
-+        try { return [JSON.parse(fs.readFileSync(path.join(semanticDir, name), "utf8")) as { running: boolean; paused: boolean; selectedSessions: number; requestsToday: number }]; } catch { return []; }
++        try { return [JSON.parse(fs.readFileSync(path.join(semanticDir, name), "utf8")) as { running: boolean; paused: boolean; selectedSessions: number; requestsToday: number; updatedAt: number }]; } catch { return []; }
 +    }) : [];
 +    try {
 +        let origin: string | undefined;
@@ -8681,9 +8684,17 @@ index 0000000000000000000000000000000000000000..99ab6f8a39388214de433d41e0dd24dc
 +        };
 +        for (const query of ["岑舒", "青枔", "preserveRecentTokens=12000", "semantic-dist-new-message"]) assert.ok((await search(query)).includes(query));
 +        assert.ok(statuses().some(status => status.running && status.selectedSessions > 0), "packaged semantic worker must really start and observe the synthetic session");
-+        fs.writeFileSync(path.join(semanticDir, "all.control.json"), JSON.stringify({ id: randomUUID(), action: "pause", at: Date.now() }));
-+        for (let i = 0; i < 80 && !statuses().some(status => status.paused); i++) await delay(50);
-+        assert.ok(statuses().some(status => status.paused), "background worker must apply the persisted control");
++        const controlAt = Date.now();
++        fs.writeFileSync(path.join(semanticDir, "all.control.json"), JSON.stringify({ id: randomUUID(), action: "pause", at: controlAt }));
++        // The idle worker publishes its status every 5 s, independently of its
++        // 500 ms control tick. Allow that publication cadence plus CI scheduling,
++        // without another search that would itself force a status refresh.
++        const controlDeadline = controlAt + 15000;
++        while (Date.now() < controlDeadline && child.exitCode === null
++            && !statuses().some(status => status.paused && status.updatedAt >= controlAt)) await delay(100);
++        const controlStatuses = statuses();
++        assert.ok(controlStatuses.some(status => status.paused && status.updatedAt >= controlAt),
++            "background worker must publish the persisted control: " + JSON.stringify({ controlAt, statuses: controlStatuses, exitCode: child.exitCode, output: output.slice(-1000) }));
 +        assert.ok((await search("青枔")).includes("青枔"), "pausing semantic retrieval must retain exact search");
 +        const exact = await search("preserveRecentTokens=12000", "exact"); assert.match(exact, /indexed keyword search/);
 +        assert.ok(statuses().every(status => status.requestsToday === 0), "missing test key must prevent all paid requests");
@@ -8700,10 +8711,10 @@ index 0000000000000000000000000000000000000000..99ab6f8a39388214de433d41e0dd24dc
 +});
 diff --git a/tests/semantic-engine-integration.test.ts b/tests/semantic-engine-integration.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..3c0389e71621dbba9c8a591b22f04d1aabd2061d
+index 0000000000000000000000000000000000000000..69cc2b65964678e3abb16b436124e06f40079d91
 --- /dev/null
 +++ b/tests/semantic-engine-integration.test.ts
-@@ -0,0 +1,273 @@
+@@ -0,0 +1,292 @@
 +import test, { type TestContext } from "node:test";
 +import assert from "node:assert/strict";
 +import fs from "node:fs";
@@ -8778,6 +8789,25 @@ index 0000000000000000000000000000000000000000..3c0389e71621dbba9c8a591b22f04d1a
 +const evidence = (rows: ReturnType<SearchIndexEngine["query"]>): EvidenceCandidate[] => rows.matchIds.flatMap(id => {
 +    const row = rows.rows.find(row => row.id === id);
 +    return row?.prepared ? [{ id, sessionId: "chat", version: row.prepared.evidence, text: row.prepared.text, exact: rows.semantic?.exactIds.includes(id), corrects: row.corrects }] : [];
++});
++
++test("new persisted controls publish their acknowledgement immediately without repeated heartbeat writes", async t => {
++    const f = fixture(t), now = Date.now();
++    t.mock.method(Date, "now", () => now);
++    const status = t.mock.method(f.engine, "status", f.engine.status.bind(f.engine));
++    const control = path.join(f.dir, "semantic-search", "all.control.json");
++    const statusFile = path.join(f.dir, "semantic-search", f.engine.instance + ".status.json");
++    const readStatus = () => JSON.parse(fs.readFileSync(statusFile, "utf8")) as { paused: boolean; phase: string };
++    fs.writeFileSync(control, JSON.stringify({ id: "pause-now", action: "pause" }));
++    await f.engine.tick();
++    assert.equal(readStatus().paused, true); assert.equal(readStatus().phase, "paused");
++    assert.equal(status.mock.callCount(), 1, "operator command publishes without waiting 5 seconds");
++    await f.engine.tick();
++    assert.equal(status.mock.callCount(), 1, "the same command is acknowledged only once");
++    fs.writeFileSync(control, JSON.stringify({ id: "resume-now", action: "resume" }));
++    await f.engine.tick();
++    assert.equal(readStatus().paused, false); assert.equal(readStatus().phase, "idle");
++    assert.equal(status.mock.callCount(), 2);
 +});
 +
 +test("A lexical/B vector/C hybrid/D localized hybrid retain Chinese originals and later negation without shared query words", async t => {
