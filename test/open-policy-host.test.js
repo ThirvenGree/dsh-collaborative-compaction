@@ -113,7 +113,7 @@ test('newly reported evidence dependency can become a scoped production strategy
  async function start(){
   fs.rmSync(hostFile,{force:true});
   apply({llm:{stream},webServer:{register(spec){
-   ui=http.createServer(spec.handler);ui.listen(0,'127.0.0.1');return()=>new Promise(r=>ui.close(r));
+   const registered=http.createServer(spec.handler);ui=registered;registered.listen(0,'127.0.0.1');return()=>new Promise(r=>registered.close(r));
   }},effect:fn=>{const off=fn();if(typeof off==='function')clean.push(off);}});
   const host=await untilFile(hostFile);base='http://127.0.0.1:'+host.port;
   token=fs.readFileSync(path.join(dir,'local-token'),'utf8');

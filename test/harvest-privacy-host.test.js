@@ -63,7 +63,7 @@ test('disabled cross-review never starts harvest; disabling and re-enabling canc
   yield {type:'text-delta',text:output};yield {type:'finish',reason:{kind:'stop'}};
  }
  apply({llm:{stream},effect:fn=>{const off=fn();if(typeof off==='function')clean.push(off);},webServer:{register(spec){
-  ui=http.createServer(spec.handler);ui.listen(0,'127.0.0.1');return()=>new Promise(r=>ui.close(r));
+  const registered=http.createServer(spec.handler);ui=registered;registered.listen(0,'127.0.0.1');return()=>new Promise(r=>registered.close(r));
  }}});
  const hostFile=path.join(dir,'host.json'),host=await until(()=>fs.existsSync(hostFile)&&JSON.parse(fs.readFileSync(hostFile,'utf8')),'host ready');
  base='http://127.0.0.1:'+host.port;token=fs.readFileSync(path.join(dir,'local-token'),'utf8');

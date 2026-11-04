@@ -2,6 +2,8 @@
 
 新插件提供模型处理与设置页；billion-context 仍是唯一压缩范围、历史保留和提交者。主会话继续使用它原来的 DeepSeek 模型。
 
+**0.4.0 增加跨语言和五类媒体的语义检索**：原有 SQLite FTS5 精确原文搜索保持，新增 Gemini Embedding 2 向量召回、融合排序、来源核验及按需第二跳。设置页新增「语义与媒体检索」。[完整设置、实际验证及边界](SEMANTIC-SEARCH.md)。
+
 - A：通过 DSH 的 LLM 服务，使用可配置 Provider / Model 和 billion-context 的压缩指令生成候选。默认 `deepseek-account/deepseek-flash`，复用本机 DSH 账户，不另存密钥。
 - B：Claude Messages 的原生按需压缩 `compaction: {type: "summarize"}`，beta `compact-2026-09-04`，默认 `claude-sonnet-5-5`。不把普通聊天摘要冒充原生压缩。
 - 审核：`gpt-6.1-terra` Responses API，同时读取本次原始历史、A、B。`store:false`，推理强度可调。

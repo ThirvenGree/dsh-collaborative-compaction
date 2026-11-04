@@ -97,7 +97,7 @@ test('authenticated production compression learns isolated synthetic cases, repl
  const hostFile=path.join(dir,'host.json');
  async function start(){
   fs.rmSync(hostFile,{force:true});
-  apply({llm:{stream},webServer:{register(spec){ui=http.createServer(spec.handler);ui.listen(0,'127.0.0.1');return()=>new Promise(resolve=>ui.close(resolve));}},
+  apply({llm:{stream},webServer:{register(spec){const registered=http.createServer(spec.handler);ui=registered;registered.listen(0,'127.0.0.1');return()=>new Promise(resolve=>registered.close(resolve));}},
    effect:fn=>{const off=fn();if(typeof off==='function')offs.push(off);}});
   const host=await until(()=>fs.existsSync(hostFile)&&read(hostFile),'host ready');
   base='http://127.0.0.1:'+host.port;token=fs.readFileSync(path.join(dir,'local-token'),'utf8');

@@ -639,7 +639,7 @@ function Semantic({active}){
   }catch(e){setError(e.message);}
   finally{working.current=false;setBusy(false);}
  }
- const status=value?.status,stale=status?.updatedAt&&Date.now()-status.updatedAt>120000;
+ const status=value?.status,stale=status?.updatedAt&&Date.now()-status.updatedAt>30000;
  const flag=!value?.config?'等待引擎':!value.config.enabled?'未启用':status?.paused?'已暂停':stale?'最近状态已过期':status?.running?'后台运行中':'等待检索任务';
  const phase=status?.phase||'尚无任务';
  const per=status?.modalities??status?.perModality??{};

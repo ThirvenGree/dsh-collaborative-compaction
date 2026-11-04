@@ -56,6 +56,7 @@
     "client.js",
     "cordis.patch.yml",
     "README.md",
+    "SEMANTIC-SEARCH.md",
     "docs",
     "LICENSE",
     "patches",
