@@ -1036,12 +1036,43 @@ index 0af1155dd3e48b5378fa92f2ddd7fdc636979e21..00b9120a1480eb5b56bec936dbd860b0
                                  const rescued = truncateSummaryToLimit(candidate, maxSummary, activeConfig.compress.minSummaryLength);
                                  if (rescued !== null && shrinkOk(rescued)) {
                                      deps.log("warn", `[preflight] range ${skipKey}: assembled summary ${candidate.length} chars exceeded maxSummaryLength (${maxSummary}); truncated to ${rescued.length} chars`);
+diff --git a/src/search-cache.ts b/src/search-cache.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0d8d53c221fc1be72685dfeb33b11644f20d0ea
+--- /dev/null
++++ b/src/search-cache.ts
+@@ -0,0 +1,25 @@
++/** Bounded caches for immutable search projections. Weights are conservative UTF-16
++ * string bytes plus per-record overhead; the cold query still reads its full source. */
++export class SearchLru<K, V> {
++    private values = new Map<K, { value: V; bytes: number }>();
++    private used = 0;
++    constructor(readonly budget = 32 * 1024 * 1024, readonly itemLimit = 8 * 1024 * 1024) {}
++    get(key: K): V | undefined {
++        const item = this.values.get(key);
++        if (!item) return;
++        this.values.delete(key); this.values.set(key, item);
++        return item.value;
++    }
++    set(key: K, value: V, bytes: number): void {
++        this.delete(key);
++        if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.itemLimit || bytes > this.budget) return;
++        while (this.used + bytes > this.budget && this.values.size) this.delete(this.values.keys().next().value!);
++        this.values.set(key, { value, bytes }); this.used += bytes;
++    }
++    delete(key: K): void {
++        const prior = this.values.get(key);
++        if (prior) { this.used -= prior.bytes; this.values.delete(key); }
++    }
++    clear(): void { this.values.clear(); this.used = 0; }
++    stats(): { entries: number; bytes: number } { return { entries: this.values.size, bytes: this.used }; }
++}
 diff --git a/src/search-evidence.ts b/src/search-evidence.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..c8bdcb6ab6b68cf9764323dfaaff31dc1626be79
+index 0000000000000000000000000000000000000000..c384314fbb2d228bdb9876adc7e96d35266805ad
 --- /dev/null
 +++ b/src/search-evidence.ts
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,148 @@
 +import { createHash } from "node:crypto";
 +import type { CoreMessage, MessageContentStore } from "acp-kernel";
 +import type { BiliMessage } from "acp-kernel/wire";
@@ -1049,14 +1080,35 @@ index 0000000000000000000000000000000000000000..c8bdcb6ab6b68cf9764323dfaaff31dc
 +import type { SearchTranscriptRow } from "./storage/store.js";
 +import { redactSecretsInText } from "./log-mask.js";
 +import { safePrefix } from "./text-safe.js";
++import { SearchLru } from "./search-cache.js";
 +
 +const pageSize = 1600;
 +const hash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 24);
 +const clean = (s: string) => redactSecretsInText(s)
 +    .replace(/((?:令牌|密钥|口令|密码)[】"'\s:=：]*)([\w.+/=-]{8,})/giu, "$1<masked>")
 +    .replace(/(?:data:[\w.+/-]+;base64,)?[A-Za-z0-9+/=_-]{128,}/g, "<encoded bytes omitted>");
-+type Note = { key: string; text: string; label: string; ref?: string; block?: string; retrieve?: boolean; corrects?: string };
++type PreparedText = { text: string; lower: string; evidence: string };
++type Note = PreparedText & { key: string; label: string; ref?: string; block?: string; retrieve?: boolean; corrects?: string };
 +type Hit = { note: Note; score: number; at: number; order: number };
++const preparedCache = new SearchLru<string, PreparedText & { source: string; attachment: string; sessionId: string }>();
++const sessionKeys = new WeakMap<object, number>();
++let sessionSequence = 0, preparedHits = 0, preparedMisses = 0;
++function prepareText(session: Session, key: string, source: string, attachment = ""): PreparedText {
++    let owner = sessionKeys.get(session);
++    if (owner === undefined) { owner = ++sessionSequence; sessionKeys.set(session, owner); }
++    const cacheKey = owner + "/" + key, prior = preparedCache.get(cacheKey);
++    // Exact values, not array identity/length/prepare epoch, catch in-place and same-length edits.
++    if (prior?.source === source && prior.attachment === attachment && prior.sessionId === session.id) {
++        preparedHits++; return prior;
++    }
++    preparedMisses++;
++    const text = clean([source, attachment ? "[attachment] " + attachment : ""].filter(Boolean).join("\n"));
++    const result = { source, attachment, sessionId: session.id, text, lower: text.toLowerCase(), evidence: "ev-" + hash(session.id + "\0" + key + "\0" + text) };
++    preparedCache.set(cacheKey, result, 256 + 2 * (source.length + attachment.length + session.id.length + text.length + result.lower.length));
++    return result;
++}
++/** Local diagnostic counters contain no source content or session identifiers. */
++export function searchEvidenceCacheStats() { return { ...preparedCache.stats(), hits: preparedHits, preparations: preparedMisses }; }
 +
 +function fromWire(m: CoreMessage): SearchTranscriptRow {
 +    const raw = m as BiliMessage & { timestamp?: string | number; source?: {kind?: string}; corrects?: string; attachment?: {description?: string} };
@@ -1105,16 +1157,17 @@ index 0000000000000000000000000000000000000000..c8bdcb6ab6b68cf9764323dfaaff31dc
 +    for(const m of messages.values()){
 +        const ref=refs[m.id], stored=ref && store?.byRef[ref];
 +        const original=stored && stored.rawId===m.id ? store?.byHash[stored.hash]:undefined;
-+        const text=clean([original??m.text,m.attachment?"[attachment] "+m.attachment:""].filter(Boolean).join("\n"));
-+        if(!text) continue;
-+        notes.push({key:m.id,text,ref:ref?.startsWith("m")?ref:undefined,block:coverage.get(m.id),retrieve:original!==undefined,label:metadata(m),corrects:typeof m.corrects==="string"?m.corrects:undefined});
++        const prepared=prepareText(session,m.id,original??m.text??"",m.attachment??"");
++        if(!prepared.text) continue;
++        notes.push({...prepared,key:m.id,ref:ref?.startsWith("m")?ref:undefined,block:coverage.get(m.id),retrieve:original!==undefined,label:metadata(m),corrects:typeof m.corrects==="string"?m.corrects:undefined});
 +    }
 +    const messageCount=notes.length;
 +    for(const block of session.state.blocks){
 +        if(block.active)continue; // active summaries already have their own ranked section
-+        notes.push({key:"summary/"+block.blockId,text:clean([block.topic,block.summary].filter(Boolean).join("\n")),label:"historical inactive summary; block time="+block.createdAt,block:block.blockId});
++        const key="summary/"+block.blockId;
++        notes.push({...prepareText(session,key,[block.topic,block.summary].filter(Boolean).join("\n")),key,label:"historical inactive summary; block time="+block.createdAt,block:block.blockId});
 +    }
-+    const identity=(n: Note)=>"ev-"+hash(session.id+"\0"+n.key+"\0"+n.text);
++    const identity=(n: Note)=>n.evidence;
 +    const cite=(n:Note)=>`${clean(n.key).slice(0,160)}${n.ref?" "+n.ref:""}${n.block?" "+n.block:""} ${n.label}`;
 +    if(read){
 +        const n=notes.find(n=>identity(n)===read[1]);
@@ -1129,7 +1182,7 @@ index 0000000000000000000000000000000000000000..c8bdcb6ab6b68cf9764323dfaaff31dc
 +    const hits:Hit[]=[];
 +    function consider(note:Note,order:number) {
 +        if(selectedIds&&!selectedIds.has(note.key)&&note.key!=="summary/"+target?.blockId)return;
-+        const body=note.text.toLowerCase();let score=0,at=-1;
++        const body=note.lower;let score=0,at=-1;
 +        for(const t of terms){const i=body.indexOf(t);if(i>=0){score++;if(at<0)at=i;}}
 +        if(score===0)return;
 +        if(body.includes(searchText)) score+=terms.length;
@@ -1158,11 +1211,11 @@ index 0000000000000000000000000000000000000000..c8bdcb6ab6b68cf9764323dfaaff31dc
 +        if(!b.effectiveMessageIds.some(id=>!messages.has(id)))continue;
 +        const view=session.blockContents.get(b.blockId)?.full;
 +        if(!view?.text)continue;
-+        const searchable=clean(view.text).toLowerCase();
++        const searchable=prepareText(session,"archive/"+b.blockId,view.text).lower;
 +        if(!terms.every(t=>searchable.includes(t)))continue;
 +        if(legacy++>=Math.min(3,limit))break;
 +        const ids=new Set(b.effectiveMessageIds);
-+        const exact=hits.find(hit=>ids.has(hit.note.key)&&terms.every(t=>hit.note.text.toLowerCase().includes(t)));
++        const exact=hits.find(hit=>ids.has(hit.note.key)&&terms.every(t=>hit.note.lower.includes(t)));
 +        if(exact)lines.push(`${b.blockId} [archived original match]\n${renderHit(exact)}`);
 +        else lines.push(`${b.blockId} [flattened archive locator; original speaker/time unavailable], inspect block via decompress; no attributable quote.`);
 +    }
@@ -1260,6 +1313,77 @@ index d1083ee4d7663fe4f8105737dfe5d61b393fc043..5023fd9601951e1e03e277010331abb6
  }
  
  /** Record original block content at compress time. */
+diff --git a/src/storage/search-transcript-cache.ts b/src/storage/search-transcript-cache.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5cdfc7ef5a8707e4d1d1d9552fa99a4a59494a35
+--- /dev/null
++++ b/src/storage/search-transcript-cache.ts
+@@ -0,0 +1,65 @@
++import type { SqliteDatabase } from "./driver.js";
++import type { SearchTranscriptRow } from "./store.js";
++import { SearchLru } from "../search-cache.js";
++
++// Independent of session.prepare/markDirty: only actual searchable data mutations
++// advance this version, even when another connection performs an update/delete.
++// Tombstone version rows survive session deletion to prevent delete/recreate ABA.
++const ddl = `
++CREATE TABLE IF NOT EXISTS search_transcript_revisions (session_id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
++CREATE TRIGGER IF NOT EXISTS search_transcript_insert AFTER INSERT ON messages BEGIN
++ INSERT INTO search_transcript_revisions VALUES (NEW.session_id,1) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++END;
++CREATE TRIGGER IF NOT EXISTS search_transcript_delete AFTER DELETE ON messages BEGIN
++ INSERT INTO search_transcript_revisions VALUES (OLD.session_id,1) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++END;
++CREATE TRIGGER IF NOT EXISTS search_transcript_update AFTER UPDATE OF session_id,seq,msg_id,role,kind,content_hash,retired_at ON messages
++ WHEN OLD.session_id IS NOT NEW.session_id OR OLD.seq IS NOT NEW.seq OR OLD.msg_id IS NOT NEW.msg_id OR OLD.role IS NOT NEW.role OR OLD.kind IS NOT NEW.kind OR OLD.content_hash IS NOT NEW.content_hash OR OLD.retired_at IS NOT NEW.retired_at BEGIN
++ INSERT INTO search_transcript_revisions VALUES (OLD.session_id,1) ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++ INSERT INTO search_transcript_revisions SELECT NEW.session_id,1 WHERE NEW.session_id IS NOT OLD.session_id
++ ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++END;
++CREATE TRIGGER IF NOT EXISTS search_transcript_content_update AFTER UPDATE OF bytes ON content WHEN OLD.bytes IS NOT NEW.bytes BEGIN
++ INSERT INTO search_transcript_revisions SELECT DISTINCT session_id,1 FROM messages WHERE content_hash=NEW.hash
++ ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++END;
++CREATE TRIGGER IF NOT EXISTS search_transcript_content_delete BEFORE DELETE ON content BEGIN
++ INSERT INTO search_transcript_revisions SELECT DISTINCT session_id,1 FROM messages WHERE content_hash=OLD.hash
++ ON CONFLICT(session_id) DO UPDATE SET revision=revision+1;
++END;`;
++
++export class SearchTranscriptCache {
++    private cache = new SearchLru<string, { revision: number; rows: SearchTranscriptRow[] }>();
++    private schemaVersion: number | undefined;
++    private hits = 0;
++    private loads = 0;
++    constructor(private db: SqliteDatabase) {}
++    private revision(sessionId: string): number | null {
++        try {
++            const schema = Number((this.db.prepare("PRAGMA schema_version").get() as { schema_version: number }).schema_version);
++            if (schema !== this.schemaVersion) {
++                this.cache.clear(); this.db.exec(ddl);
++                this.schemaVersion = Number((this.db.prepare("PRAGMA schema_version").get() as { schema_version: number }).schema_version);
++            }
++            const row = this.db.prepare("SELECT revision FROM search_transcript_revisions WHERE session_id=?").get(sessionId) as { revision: number } | undefined;
++            return row?.revision ?? 0;
++        } catch { this.cache.clear(); this.schemaVersion = undefined; return null; }
++    }
++    read(sessionId: string, load: () => SearchTranscriptRow[]): SearchTranscriptRow[] {
++        const version = this.revision(sessionId);
++        const cached = version === null ? undefined : this.cache.get(sessionId);
++        if (cached?.revision === version) { this.hits++; return cached.rows; }
++        this.loads++;
++        const rows = load();
++        // A writer can commit between the two reads; never associate new rows with an old version.
++        if (version !== null && this.revision(sessionId) === version) {
++            const bytes = rows.reduce((n, r) => n + 256 + Object.values(r).reduce<number>((s, v) => s + (typeof v === "string" ? v.length * 2 : 16), 0), 0);
++            // Expose immutable projections, so a caller cannot poison another search using a cached array.
++            rows.forEach(Object.freeze); Object.freeze(rows);
++            this.cache.set(sessionId, { revision: version, rows }, bytes);
++        } else this.cache.delete(sessionId);
++        return rows;
++    }
++    clear(): void { this.cache.clear(); }
++    stats() { return { ...this.cache.stats(), hits: this.hits, loads: this.loads }; }
++}
 diff --git a/src/storage/shadow.ts b/src/storage/shadow.ts
 index aec7da44eb14d223d916d72c909411b309dd1586..592abc022111d65f17c96c08d589df5a95ddc0ac 100644
 --- a/src/storage/shadow.ts
@@ -1278,10 +1402,18 @@ index aec7da44eb14d223d916d72c909411b309dd1586..592abc022111d65f17c96c08d589df5a
          if (this.sync === null) return [];
          this.assertLive();
 diff --git a/src/storage/store.ts b/src/storage/store.ts
-index 0cab41538d5f0fdc495006c015d36c85e99f50af..f723da6a286a73e8a7d8934ca535b68fb40086d7 100644
+index 0cab41538d5f0fdc495006c015d36c85e99f50af..47b1d9cfdbdb878f39f4d7ba7c11f52c24605d07 100644
 --- a/src/storage/store.ts
 +++ b/src/storage/store.ts
-@@ -87,6 +87,11 @@ export interface SessionRow {
+@@ -27,6 +27,7 @@ import { recordIntegrityOutcome, recordSecondProcessOwner, recordBackupOutcome }
+ import { integrityModeFor, writeIntegrityCache, scheduleBackgroundIntegrityCheck, backgroundIntegrityInflightForTests, noteIntegrityCheckRun } from "./integrity-check.js";
+ import { listInstances, type RegistryEntry } from "../instance.js";
+ import type { MessageContentStore } from "acp-kernel";
++import { SearchTranscriptCache } from "./search-transcript-cache.js";
+ 
+ /** #3250: run a PASSIVE wal_checkpoint every N successful ingests. The
+  *  built-in autocheckpoint alone cannot guarantee reclamation in a long-lived
+@@ -87,6 +88,11 @@ export interface SessionRow {
      orphansJson?: string | null;
  }
  
@@ -1293,13 +1425,37 @@ index 0cab41538d5f0fdc495006c015d36c85e99f50af..f723da6a286a73e8a7d8934ca535b68f
  export interface MessageRow {
      seq: number;
      msgId: string;
-@@ -1437,6 +1442,26 @@ export class UnifiedStore {
+@@ -339,6 +345,7 @@ export class UnifiedStore {
+     /** Where the engine came from (#2833): builtin / host / self-downloaded — logged at enable so field diagnosis can tell which acquisition path a lane ran on. */
+     readonly engineSource: SqliteEngineSource;
+     private readonly db: SqliteDatabase;
++    private readonly searchTranscriptCache: SearchTranscriptCache;
+     /** #3250: successful-ingest counter driving the WAL_CHECKPOINT_EVERY_INGESTS cadence. */
+     private ingestCount = 0;
+     /** #4175: the live foreign pid found holding <db>.lock at open, if any. */
+@@ -353,6 +360,7 @@ export class UnifiedStore {
+ 
+     private constructor(db: SqliteDatabase, engine: SqliteEngineName, engineSource: SqliteEngineSource, lockPath: string | null, foreignLockHolder: { pid: number } | null, dbPath: string) {
+         this.db = db;
++        this.searchTranscriptCache = new SearchTranscriptCache(db);
+         this.engine = engine;
+         this.engineSource = engineSource;
+         this.lockPath = lockPath;
+@@ -492,6 +500,7 @@ export class UnifiedStore {
+     }
+ 
+     close(): void {
++        this.searchTranscriptCache.clear();
+         // #3250: converge the WAL before releasing the handle so a clean exit
+         // leaves nothing for the next boot's recovery to replay. Same isolation
+         // as open(): a checkpoint hiccup logs and never throws — callers treat
+@@ -1437,6 +1446,26 @@ export class UnifiedStore {
       *  so "gone from the window" must not read as "gone". Unknown refs simply
       *  come back absent; retired rows (rewound/undo history) stay excluded,
       *  matching every other view-lane reader. */
 +    /** Text-only projection for own-session keyword recall. Media CAS bytes are never hydrated. */
 +    searchableTranscript(sessionId: string): SearchTranscriptRow[] {
-+        return this.db.prepare(`
++        return this.searchTranscriptCache.read(sessionId, () => this.db.prepare(`
 +            SELECT m.msg_id AS id, m.role, m.kind AS contentType,
 +                   json_extract(CAST(c.bytes AS TEXT), '$.text') AS text,
 +                   json_extract(CAST(c.bytes AS TEXT), '$.toolName') AS toolName,
@@ -1314,7 +1470,7 @@ index 0cab41538d5f0fdc495006c015d36c85e99f50af..f723da6a286a73e8a7d8934ca535b68f
 +            WHERE m.session_id=? AND m.retired_at IS NULL AND m.role IN ('user','assistant','tool')
 +              AND m.kind != 'reasoning' AND json_valid(CAST(c.bytes AS TEXT))
 +            ORDER BY m.seq
-+        `).all(sessionId) as SearchTranscriptRow[];
++        `).all(sessionId) as SearchTranscriptRow[]);
 +    }
 +
      messageContentByRefNums(sessionId: string, refNums: readonly number[]): MessageRefContentRow[] {
@@ -1716,6 +1872,91 @@ index 2e8f71de9315c17d26133c306faa2f13b3bf967f..025ea371961145682555fe35fa405510
          rmrf(dir);
      }
  });
+diff --git a/tests/search-evidence-cache.test.ts b/tests/search-evidence-cache.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f451de856cc7c6930180a45e5348231b6c0d78f3
+--- /dev/null
++++ b/tests/search-evidence-cache.test.ts
+@@ -0,0 +1,79 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { createInitialState, type CoreMessage } from "acp-kernel";
++import { UnifiedStore } from "../src/storage/store.js";
++import { openSqliteDatabase, type SqliteDatabase } from "../src/storage/driver.js";
++import type { SearchTranscriptCache } from "../src/storage/search-transcript-cache.js";
++import { SearchLru } from "../src/search-cache.js";
++import { searchEvidence, searchEvidenceCacheStats } from "../src/search-evidence.js";
++import type { Session } from "../src/session.js";
++
++test("SQLite original projection reuses unchanged sessions but invalidates edits, retirements, append and recreation",t=>{
++ const dir=fs.mkdtempSync(path.join(os.tmpdir(),"bili-search-cache-")),file=path.join(dir,"index.db");
++ const store=UnifiedStore.open(file),internal=store as unknown as {db:SqliteDatabase;searchTranscriptCache:SearchTranscriptCache};
++ const other=openSqliteDatabase(file).db;
++ t.after(()=>{other.close();store.close();fs.rmSync(dir,{recursive:true,force:true});});
++ const add=(sid:string,seq:number,body:string,db=internal.db)=>{
++  const raw=JSON.stringify({text:body,timestamp:123,source:{kind:"user"}}),hash=sid+"-"+seq+"-"+body;
++  db.prepare("INSERT INTO content(hash,byte_len,bytes) VALUES (?,?,?)").run(hash,raw.length,Buffer.from(raw));
++  db.prepare("INSERT INTO messages(session_id,seq,msg_id,role,kind,content_hash) VALUES (?,?,?,'user','text',?)").run(sid,seq,"m"+seq,hash);
++  return hash;
++ };
++ const hash=add("one",1,"old word");
++ const initial=store.searchableTranscript("one");assert.equal(initial[0]?.text,"old word");
++ assert.strictEqual(store.searchableTranscript("one"),initial);
++ assert.equal(internal.searchTranscriptCache.stats().loads,1);
++ assert.throws(()=>{initial[0]!.text="poison";},TypeError);
++ // Re-saving identical bytes and unrelated metadata/session data must not invalidate this session.
++ internal.db.prepare("UPDATE messages SET role=role,retired_at=retired_at WHERE session_id='one'").run();
++ add("two",1,"other session",other);
++ assert.strictEqual(store.searchableTranscript("one"),initial);
++ assert.equal(internal.searchTranscriptCache.stats().loads,1);
++ // Same row count and same string length, written from another SQLite connection.
++ const edited=JSON.stringify({text:"new word",timestamp:123,source:{kind:"user"}});
++ other.prepare("UPDATE content SET bytes=? WHERE hash=?").run(Buffer.from(edited),hash);
++ assert.equal(store.searchableTranscript("one")[0]?.text,"new word");
++ assert.equal(internal.searchTranscriptCache.stats().loads,2);
++  const replacement=JSON.stringify({text:"next row"});
++  other.prepare("INSERT INTO content(hash,byte_len,bytes) VALUES ('replacement',?,?)").run(replacement.length,Buffer.from(replacement));
++  other.prepare("UPDATE messages SET content_hash='replacement' WHERE session_id='one' AND seq=1").run();
++  assert.equal(store.searchableTranscript("one")[0]?.text,"next row");
++ add("one",2,"second message",other);assert.equal(store.searchableTranscript("one").length,2);
++ other.prepare("UPDATE messages SET retired_at=42 WHERE session_id='one' AND seq=1").run();
++ assert.deepEqual(store.searchableTranscript("one").map(r=>r.text),["second message"]);
++ other.prepare("DELETE FROM messages WHERE session_id='one'").run();assert.deepEqual(store.searchableTranscript("one"),[]);
++ add("one",1,"recreated row",other);assert.equal(store.searchableTranscript("one")[0]?.text,"recreated row");
++ // A schema repair that drops a trigger invalidates the cache and reinstalls the revision protocol.
++ other.exec("DROP TRIGGER search_transcript_update");
++ other.prepare("UPDATE messages SET role='tool' WHERE session_id='one'").run();
++ assert.equal(store.searchableTranscript("one")[0]?.role,"tool");
++  assert.equal(internal.searchTranscriptCache.stats().loads,8);
++});
++
++test("prepared evidence reuses redaction and normalized text, with same-length in-memory edits and scope changes detected",()=>{
++ const state=createInitialState(),messages:CoreMessage[]=[{id:"x",role:"tool",contentType:"text",text:"needleA "+"资料".repeat(10000)+" token=abcdef__123456789"}];
++ const session={id:"cache-scope-one",state,blockContents:new Map(),lastMessages:messages} as unknown as Session;
++ const query=(text:string)=>searchEvidence(session,text,3,messages,[]);
++ const before=searchEvidenceCacheStats(),hit=query("needleA");
++ const warm=searchEvidenceCacheStats();assert.equal(warm.preparations,before.preparations+1);
++ assert.match(query("资料"),/historical evidence/);assert.equal(searchEvidenceCacheStats().preparations,warm.preparations);
++ const handle=hit.match(/read: (open:ev-[a-f0-9]+:\d+)/)![1]!;
++ query(handle);assert.equal(searchEvidenceCacheStats().preparations,warm.preparations,"open handles do not rehash every full body");
++ assert.doesNotMatch(query("token"),/abcdef__123456789/);
++ messages[0]!.text=messages[0]!.text!.replace("needleA","needleB");
++ assert.match(query(handle),/unavailable or changed/);assert.match(query("needleB"),/needleB/);
++ const next=query("needleB").match(/read: (open:ev-[a-f0-9]+:\d+)/)![1]!;
++ session.id="cache-scope-two";assert.match(query(next),/unavailable or changed/);
++ messages.length=0;assert.match(query(next),/unavailable or changed/);
++});
++
++test("cache budgets evict least recently used values and never retain an oversized entry",()=>{
++ const cache=new SearchLru<string,string>(100,70);
++ cache.set("a","a",50);cache.set("b","b",40);cache.get("a");cache.set("c","c",30);
++ assert.equal(cache.get("b"),undefined);assert.equal(cache.get("a"),"a");assert.deepEqual(cache.stats(),{entries:2,bytes:80});
++ cache.set("a","too large",71);assert.equal(cache.get("a"),undefined);assert.deepEqual(cache.stats(),{entries:1,bytes:30});
++ cache.clear();assert.deepEqual(cache.stats(),{entries:0,bytes:0});
++});
 diff --git a/tests/search-original-evidence.test.ts b/tests/search-original-evidence.test.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..14a9ce0d812743cf49584df9fd67c68e85c303ed

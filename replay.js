@@ -2,6 +2,23 @@ import {createHash} from 'node:crypto';
 
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const maxQueries=3;
+// Independent cases can overlap, but each case's evidence acquisition remains serial.
+// Rejection/cancellation stops scheduling and drains outstanding calls before returning.
+export async function mapReplayTasks(items,worker,{signal,concurrency=3}={}){
+ if(!Number.isInteger(concurrency)||concurrency<1||concurrency>3)throw Error('Replay concurrency must be between 1 and 3');
+ const results=new Array(items.length);let cursor=0,failure;
+ const run=async()=>{
+  for(;;){
+   if(failure)return;
+   try{
+    signal?.throwIfAborted();const index=cursor++;if(index>=items.length)return;
+    results[index]=await worker(items[index],index);
+   }catch(error){failure??=error;return;}
+  }
+ };
+ await Promise.all(Array.from({length:Math.min(concurrency,items.length)},run));
+ if(failure)throw failure;signal?.throwIfAborted();return results;
+}
 export const fixtureCases=[
  {id:'omitted-tool',question:'此前审核通过的只读工具确切叫什么？用工具名作答。',expected:'listen_frame_Q7',requiredIds:['r1'],requiredQuotes:{r1:'listen_frame_Q7'},
   records:[{id:'r1',role:'tool',text:'审核回执：只读工具标识为 listen_frame_Q7，用于核对片段。'}],
@@ -44,9 +61,10 @@ function classify(lanes){
  if(!lanes.retrieval.foundRequired)return 'search-missed-evidence';
  return 'evidence-returned-answer-failed';
 }
-export async function runReplaySuite({cases,generate,search,provider,model,signal,method}){
- const probes=[];let providerFailure;
- for(const test of cases){
+export async function runReplaySuite({cases,generate,search,provider,model,signal,method,concurrency=3}){
+ let providerFailure;
+ const fatal=new AbortController(),callSignal=signal?AbortSignal.any([signal,fatal.signal]):fatal.signal;
+ const probes=await mapReplayTasks(cases,async test=>{
   const lanes={};
   for(const lane of ['full','summary','retrieval']){
    signal?.throwIfAborted();if(providerFailure){lanes[lane]={pass:false,calls:0,queries:[],skipped:true,error:providerFailure};continue;}
@@ -54,23 +72,26 @@ export async function runReplaySuite({cases,generate,search,provider,model,signa
    const turns=[],queries=[];let calls=0;const {visible,add}=visibleEvidence(test,lane);
    try{
     for(;;){
+     signal?.throwIfAborted();if(providerFailure)throw Object.assign(Error(providerFailure),{stopReplay:true});
      const allow=lane==='retrieval'&&queries.length<maxQueries;
      const prompt=system+(allow?' 本轮有只读 search_context；如需原文可先只返回 {"query":"关键词"}。用简短、出现在记录中的关键词；如需展开整条，使用返回的 open: 引用。':' 现在提交最终回答。');
      const input={question:test.question,...(method?{method}:{}),material,...(turns.length?{recall:turns}:{})};
      calls++;
-     const value=await generate(prompt,input,{provider,model,signal});
+     const value=await generate(prompt,input,{provider,model,signal:callSignal});
+     signal?.throwIfAborted();if(providerFailure)throw Object.assign(Error(providerFailure),{stopReplay:true});
      if(allow&&typeof value?.query==='string'&&value.query.trim()){
       const query=value.query.trim().slice(0,250),result=await search(test.records,query,test.id,add);
+      signal?.throwIfAborted();if(providerFailure)throw Object.assign(Error(providerFailure),{stopReplay:true});
       queries.push(query);turns.push({query,result});continue;
      }
      if(typeof value?.answer!=='string'||!Array.isArray(value.citations))throw Error('模型返回格式不符合回放协议');
      const foundRequired=test.requiredIds.every(id=>visible.get(id)?.some(excerpt=>test.requiredQuotes?.[id]?excerpt.includes(test.requiredQuotes[id]):excerpt.trim().length>=4));
      lanes[lane]={...judge(test,value,visible),calls,queries,foundRequired};break;
     }
-   }catch(error){if(signal?.aborted)throw signal.reason;if(error.stopReplay)providerFailure=String(error.message).slice(0,350);lanes[lane]={pass:false,calls,queries,error:String(error.message).slice(0,350)};}
+   }catch(error){if(signal?.aborted)throw signal.reason;if(error.stopReplay){providerFailure??=String(error.message).slice(0,350);fatal.abort(error);}lanes[lane]={pass:false,calls,queries,error:providerFailure||String(error.message).slice(0,350)};}
   }
-  probes.push({id:test.id,classification:classify(lanes),lanes});
- }
+  return {id:test.id,classification:classify(lanes),lanes};
+ },{signal,concurrency});
  return {provider,model,probes};
 }
 export function replaySearch(searchEvidence){

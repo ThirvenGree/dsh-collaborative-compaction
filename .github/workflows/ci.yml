@@ -12,10 +12,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.node-version'
       - run: node --check host.js
       - run: node --check client.js
       - run: npm ci --ignore-scripts
+      - run: node scripts/check-dependencies.mjs . --pinned-toolchain
       - run: npm test
   engine-patch:
     runs-on: ubuntu-latest
@@ -23,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.node-version'
       - name: Verify pinned upstream and patch
         run: |
           git clone --no-checkout https://github.com/ranxianglei/billion-context.git .engine
@@ -32,13 +33,15 @@ jobs:
           git -C .engine apply ../patches/billion-context-v0.1.209.patch
       - run: npm ci --ignore-scripts
         working-directory: .engine
+      - run: node scripts/check-dependencies.mjs .engine --sqlite --pinned-toolchain
       - run: npm run build
         working-directory: .engine
-      - run: node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts tests/search-original-evidence.test.ts tests/search-context-cross-session.test.ts tests/ccr-plugin.test.ts
+      - run: node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts tests/search-original-evidence.test.ts tests/search-evidence-cache.test.ts tests/search-context-cross-session.test.ts tests/ccr-plugin.test.ts
         working-directory: .engine
       - run: node --import tsx --test --test-name-pattern="collaborative compact" tests/dsh-native.test.ts
         working-directory: .engine
       - run: npm ci --ignore-scripts
+      - run: node scripts/check-dependencies.mjs . --pinned-toolchain
       - name: Run the feedback loop through its HTTP endpoints
         env:
           COLLAB_TEST_ENGINE: ${{ github.workspace }}/.engine

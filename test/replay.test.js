@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {setTimeout as delay} from 'node:timers/promises';
 import {fixtureCases,runReplaySuite,screenMethod} from '../replay.js';
 const fixture=fixtureCases[0];
 const correct={answer:fixture.expected,citations:[{id:'r1',quote:fixture.expected}]};
@@ -39,6 +40,44 @@ test('a quota rejection pauses all remaining lanes and makes method screening re
  const report=await screenMethod(gate,{model:'same',provider:'p',search(){throw Error('unexpected')},generate:async()=>{
   calls++;throw Object.assign(Error('ACCOUNT_QUOTA 402'),{stopReplay:true});
  }});
- assert.equal(calls,1);assert.equal(report.status,'unavailable');assert.ok(report.retryable);assert.match(report.error,/402/);
- assert.equal(report.probes[1].lanes.full.skipped,true);
+ assert.ok(calls>=1&&calls<=2,'at most already-started cases can reach the provider');assert.equal(report.status,'unavailable');assert.ok(report.retryable);assert.match(report.error,/402/);
+ assert.equal(report.probes[1].lanes.summary.skipped,true);
+});
+
+test('independent cases overlap up to three while lanes and retrieval stay sequential and output order stays stable',async()=>{
+ const cases=Array.from({length:8},(_,i)=>({...fixture,id:'parallel-'+i,question:'question-'+i}));
+ let active=0,peak=0;const inflight=new Set(),seen=new Map();
+ const report=await runReplaySuite({cases,generate:async(system,input)=>{
+  assert(!inflight.has(input.question),'same case cannot have overlapping model calls');
+  inflight.add(input.question);active++;peak=Math.max(peak,active);
+  const lane=input.material===fixture.summary?system.includes('可先')?'retrieval':'summary':'full';
+  const trace=seen.get(input.question)||[];trace.push(lane);seen.set(input.question,trace);
+  await delay((Number(input.question.at(-1))%3+1)*3);active--;inflight.delete(input.question);
+  return lane==='retrieval'&&!input.recall?{query:'original'}:correct;
+ },search:async(_r,_q,_id,emit)=>{active++;peak=Math.max(peak,active);await delay(2);active--;emit('r1',fixture.expected);return fixture.expected;}});
+ assert.equal(active,0);assert.equal(peak,3);assert.deepEqual(report.probes.map(p=>p.id),cases.map(c=>c.id));
+ for(const trace of seen.values())assert.deepEqual(trace,['full','summary','retrieval','retrieval']);
+});
+
+test('fatal provider failure cancels peers, prevents new model/search calls and drains in-flight tasks',async()=>{
+ const cases=Array.from({length:7},(_,i)=>({...fixture,id:'failure-'+i,question:'failure-'+i}));
+ let active=0,calls=0,searches=0,abortedPeers=0;
+ const report=await runReplaySuite({cases,generate:async(_sys,input,{signal})=>{
+  calls++;active++;
+  try{
+   if(input.question==='failure-0'){await delay(3);throw Object.assign(Error('HTTP 429'),{stopReplay:true});}
+   await delay(20);if(signal.aborted)abortedPeers++;return {query:'must not search'};
+  }finally{active--;}
+ },search:()=>{searches++;return '';}});
+ assert.equal(calls,3);assert.equal(searches,0);assert.equal(active,0);assert.equal(abortedPeers,2);
+ assert(report.probes.every(p=>p.classification==='execution-error'));
+ assert(report.probes.slice(3).every(p=>p.lanes.full.skipped));
+});
+
+test('external cancellation drains active cases before rejection and starts no later work',async()=>{
+ const controller=new AbortController();let active=0,calls=0;
+ const pending=runReplaySuite({cases:Array.from({length:6},(_,i)=>({...fixture,id:'cancel-'+i})),signal:controller.signal,
+  generate:async()=>{calls++;active++;try{await delay(25);return correct;}finally{active--;}},search:()=>{throw Error('no search');}});
+ await delay(3);controller.abort(Error('operator cancelled'));
+ await assert.rejects(pending,/operator cancelled/);assert.equal(active,0);assert.equal(calls,3);
 });

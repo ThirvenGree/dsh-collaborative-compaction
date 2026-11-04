@@ -4,6 +4,8 @@ import {harvestCase} from './harvest.js';
 import {HarvestRunner,emptyHarvest,validateHarvestState} from './harvest-runner.js';
 import {loadDynamicBank,addDynamicCase,selectDynamicCases,markDynamicCasesTested,clearDynamicBank,dynamicBankFile} from './dynamic-bank.js';
 import {emptyPolicy,effectivePolicy,evaluateFeedback,scopeOf,withPolicy} from './feedback.js';
+import {scopeStatus,scopeSnapshot,migrateLegacyScope} from './policy-scope.js';
+import {automaticSchedule,settleSchedule} from './replay-schedule.js';
 import {replaySearch,runReplaySuite,screenMethod} from './replay.js';
 import {pathToFileURL} from 'node:url';
 import http from 'node:http';
@@ -236,13 +238,12 @@ export function apply(ctx){
  fs.mkdirSync(dataRoot,{recursive:true});let token;const tokenFile=path.join(dataRoot,'local-token');if(fs.existsSync(tokenFile))token=fs.readFileSync(tokenFile,'utf8');else{token=randomBytes(32).toString('hex');fs.writeFileSync(tokenFile,token,{mode:0o600});}
  recoverRuns();
  const csrf=randomBytes(32).toString('hex');let port=0,health='starting';const pending=new Set();
- let replayJob=null,replayError='',disposed=false;
+ let replayJob=null,replayError='',replayProgress=null,disposed=false;
  const replayFile=path.join(dataRoot,'fixture-replay.json');
  const policyFile=path.join(dataRoot,'compression-policy.json');
  const harvestFile=path.join(dataRoot,'harvest-status.json');
  const learnedFile=path.join(dataRoot,dynamicBankFile);
  const hostId=randomUUID();
- const week=7*86400000;
  function policyState(){return fs.existsSync(policyFile)?read(policyFile):emptyPolicy();}
  async function changePolicy(change){
   return serialized(()=>kernelLock(policyFile,()=>{
@@ -251,9 +252,14 @@ export function apply(ctx){
    return next;
   }));
  }
+ async function migratePolicyScope(){
+  if(!fs.existsSync(policyFile))return;
+  await changePolicy(old=>{const next=migrateLegacyScope(old,config());return next===old?null:next;});
+ }
  function replayState(){
   const c=config(),state={running:!!replayJob,error:replayError,policy:null,effectivePolicy:emptyPolicy().active,report:null};
-  try{state.policy=policyState();if(c.enabled&&c.replayFeedbackEnabled)state.effectivePolicy=effectivePolicy(state.policy,scopeOf(c));
+  try{state.policy=policyState();state.scope=scopeStatus(state.policy,c);state.schedule=automaticSchedule(state.policy);state.progress=replayProgress;
+   if(c.enabled&&c.replayFeedbackEnabled)state.effectivePolicy=effectivePolicy(state.policy,scopeOf(c));
    if(fs.existsSync(replayFile))state.report=read(replayFile);}catch{state.error='无法读取策略或回放记录，正式压缩使用可核验的策略或基础策略。';}
   try{const bank=loadDynamicBank(dataRoot);state.harvest={...harvester.status(),approvedCount:bank.entries.length,
    entries:bank.entries.map(({id,createdAt,models})=>({id,createdAt,models}))};}
@@ -283,14 +289,15 @@ export function apply(ctx){
   try{
    const c=config();if(disposed||!c.enabled||!c.replayFeedbackEnabled||replayJob)return;
    if(!loadDynamicBank(dataRoot).entries.some(e=>!e.testedAt))return;
-   const state=policyState();if(Date.now()-(state.lastLearnedAttempt||0)<86400000)return;
+   const state=policyState();if(!automaticSchedule(state,'learned').ready)return;
    await startFixture('learned');
   }catch{replayError='自动题库回放暂未完成，可在设置页重试；现行策略不变。';}
  }
- async function replayOptions(signal,c){
+ async function replayOptions(signal,c,telemetry){
   if(!c.enabled)throw Error('请先启用协作压缩');
   const {searchEvidence}=await loadEngineExports();if(typeof searchEvidence!=='function')throw Error('压缩引擎尚未安装原文回放接口');
   return {provider:c.aProvider,model:c.aModel,signal,search:replaySearch(searchEvidence),generate:async(system,input,{provider,model,signal})=>{
+   if(telemetry)telemetry.readerCalls++;
    let text='',finished=false;
    for await(const part of ctx.llm.stream({provider,model,system,messages:[{id:randomUUID(),role:'user',source:{kind:'plugin',plugin:'dsh-collaborative-compaction'},content:[{type:'text',text:JSON.stringify(input)}]}],maxTokens:8192,reasoningEffort:'low',signal:AbortSignal.any([signal,AbortSignal.timeout(90000)])})){
     if(part.type==='text-delta')text+=part.text;
@@ -304,14 +311,14 @@ export function apply(ctx){
    return JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/gi,''));
   }};
  }
- async function replayCall(fn,signal,c=config()){
+ async function replayCall(fn,signal,c=config(),timeoutMs=600000,telemetry){
   const abort=new AbortController();pending.add(abort);try{
-   const combined=AbortSignal.any([abort.signal,AbortSignal.timeout(600000),...(signal?[signal]:[])]);
-   return await fn(await replayOptions(combined,c));
+   const combined=AbortSignal.any([abort.signal,AbortSignal.timeout(timeoutMs),...(signal?[signal]:[])]);
+   return await fn(await replayOptions(combined,c,telemetry));
   }finally{pending.delete(abort);}
  }
  async function runFixture(origin){
-  const c=config(),scope=scopeOf(c),id=randomUUID();
+  const c=config(),scope=scopeOf(c),id=randomUUID(),startedAt=Date.now();
   if(!c.enabled||disposed)throw Error('协作压缩未运行');
   let claim;
   if(c.replayFeedbackEnabled){
@@ -319,12 +326,13 @@ export function apply(ctx){
     if(disposed)throw Error('插件正在退出');
     const now=Date.now();
     if(old.lease&&now<old.lease.until)throw Error('另一个回放正在验证策略');
-    if(origin==='auto'&&now-old.lastAttempt<week)return null;
-    if(origin==='learned'&&now-(old.lastLearnedAttempt||0)<86400000)return null;
-    return {...old,lastAttempt:now,...(origin==='learned'?{lastLearnedAttempt:now}:{}),lease:{id,hostId,revision:old.revision,scope,origin,until:now+660000}};
+    if(origin!=='manual'&&!automaticSchedule(old,origin,now).ready)return null;
+    return {...old,lastAttempt:now,lease:{id,hostId,revision:old.revision,scope,origin,until:now+c.replayTimeoutMs+60000}};
    });
    if(!claim)return;
-  }else if(origin==='auto')return;
+  }else if(origin!=='manual')return;
+  const telemetry={startedAt,timeoutMs:c.replayTimeoutMs,readerCalls:0,pipelineCalls:0,proposalReviews:0};
+  replayProgress=telemetry;
   let bank,learned,diagnostic,feedback={status:'disabled',reason:'策略调整已关闭。'};
   try{
    await replayCall(async options=>{
@@ -335,11 +343,11 @@ export function apply(ctx){
     diagnostic=await runReplaySuite({...options,cases:diagnostics});
     if(claim)feedback=await evaluateFeedback({diagnostic,active:effectivePolicy(claim,scope),nextVersion:claim.revision+1,options,challengeGroups:groups,
       propose:({failures,active})=>proposeClause({failures,active,generate:options.generate,
-        review:(system,input)=>reviewProposedClause(system,input,c,options.signal),
+        review:(system,input)=>{telemetry.proposalReviews++;return reviewProposedClause(system,input,c,options.signal);},
         provider:options.provider,model:options.model,signal:options.signal}),
-      compress:(work,policy)=>summarize(work,c,options.signal,policy)});
+      compress:(work,policy)=>{telemetry.pipelineCalls++;return summarize(work,c,options.signal,policy);}});
     options.signal.throwIfAborted();
-   },undefined,c);
+   },undefined,c,c.replayTimeoutMs,telemetry);
   }catch(error){
    feedback={status:'unavailable',reason:String(error.message).replace(/(?:sk-[\w-]+|Bearer\s+[^\s]+|AIza[\w-]+)/gi,'[redacted]').slice(0,300)};
   }
@@ -348,15 +356,16 @@ export function apply(ctx){
    const saved=await changePolicy(old=>{
     if(disposed||old.lease?.id!==id||old.revision!==claim.revision)throw Error('策略版本已变化，丢弃旧回放');
     const latest=config();
-    if(!latest.replayFeedbackEnabled||scopeOf(latest)!==scope||Date.now()>=old.lease.until)feedback={status:'held',reason:'验证期间配置改变或租约过期，保留当前策略。'};
+    if(!latest.replayFeedbackEnabled||scopeOf(latest)!==scope||Date.now()>=old.lease.until)feedback={status:'unavailable',reason:'验证期间模型范围改变、功能关闭或租约过期，保留当前策略。'};
     if(feedback.status==='promoted'){
      try{if(!bank||loadChallengeBank(dataRoot).digest!==bank.digest||selectDynamicCases(dataRoot,{manualGroups:bank.groups}).digest!==learned?.digest)throw Error('样例包已改变');}
      catch{feedback={status:'held',reason:'验证期间回放样例包改变或已不可读，请用新样例重新验证。'};}
     }
     const {candidate,...proof}=feedback;
-    const last={...proof,origin,at:Date.now(),challengeSets:(bank?.groups.length??0)+(learned?.groups.length??0),learnedIds:learned?.ids??[],learnedDigest:learned?.digest??null,bankDigest:bank?.digest??null,proposer:c.aProvider+'/'+c.aModel,clauseReviewer:c.reviewModel,from:effectivePolicy(old,scope).version};
-    if(!!candidate&&feedback.status==='promoted')return {...old,revision:old.revision+1,previous:effectivePolicy(old,scope),active:{...candidate,proof:last},last,lease:null};
-    return {...old,last,lease:null};
+    const last={...proof,origin,at:Date.now(),telemetry:{...telemetry,elapsedMs:Date.now()-startedAt},challengeSets:(bank?.groups.length??0)+(learned?.groups.length??0),learnedIds:learned?.ids??[],learnedDigest:learned?.digest??null,bankDigest:bank?.digest??null,proposer:c.aProvider+'/'+c.aModel,clauseReviewer:c.reviewModel,from:effectivePolicy(old,scope).version};
+    const scheduled=settleSchedule(old,{origin,completed:!!diagnostic&&feedback.status!=='unavailable',now:last.at});
+    if(!!candidate&&feedback.status==='promoted')return {...scheduled,revision:old.revision+1,previous:effectivePolicy(old,scope),active:{...candidate,scopeDetails:scopeSnapshot(c),proof:last},last,lease:null};
+    return {...scheduled,last,lease:null};
    });
    feedback=saved.last;
   }
@@ -366,7 +375,7 @@ export function apply(ctx){
    if(!disposed&&selectDynamicCases(dataRoot,{manualGroups:bank.groups}).digest===learned.digest)markDynamicCasesTested(dataRoot,learned.ids);
   }));
   if(disposed)throw Error('回放随插件退出而取消');
-  const report={...diagnostic,at:Date.now(),suite:'open-replay-v2',feedback};
+  const report={...diagnostic,at:Date.now(),suite:'open-replay-v3',telemetry:{...telemetry,elapsedMs:Date.now()-startedAt},feedback};
   write(replayFile,report);return report;
  }
  function startFixture(origin='manual'){
@@ -407,9 +416,9 @@ export function apply(ctx){
    if(!Number.isSafeInteger(min)||min<1||min>Math.min(max,c.maxSummaryChars))throw Error('Incompatible summary length budget');
    const requestedTrigger=payload.metadata.dsh_compaction.trigger;
    const work={minSummaryChars:min,pressure:requestedTrigger==='auto'&&payload.metadata.dsh_compaction.pressure==='hard'?'hard':undefined,trigger:["manual","tool","auto"].includes(requestedTrigger)?requestedTrigger:"auto",content:source.content,reference:source.reference,instructions:instructions||'',maxSummaryChars:Math.min(max,c.maxSummaryChars)};
-   let policy=emptyPolicy().active,lastAttempt=null;
+   let policy=emptyPolicy().active,autoReady=false;
    if(c.replayFeedbackEnabled){
-    try{const current=policyState();policy=effectivePolicy(current,scopeOf(c));lastAttempt=current.lastAttempt;}
+    try{const current=policyState();policy=effectivePolicy(current,scopeOf(c));autoReady=automaticSchedule(current).ready;}
     catch{replayError='策略记录无效，继续使用基础压缩策略。';}
    }
    const summary=await summarize(work,c,abort.signal,policy,observation=>{
@@ -417,11 +426,11 @@ export function apply(ctx){
     harvester.enqueue({content:work.content,summary:observation.summary,trigger:work.trigger,
      eligible:payload.metadata.dsh_compaction.replayLearning!=='exclude'});
    });reply(res,200,{choices:[{message:{role:'assistant',content:summary},finish_reason:'stop'}]});
-   if(!disposed&&c.replayFeedbackEnabled&&!replayJob&&lastAttempt!==null&&Date.now()-lastAttempt>=week)void startFixture('auto').catch(()=>{});
+   if(!disposed&&c.replayFeedbackEnabled&&!replayJob&&autoReady)void startFixture('auto').catch(()=>{});
   }catch(e){reply(res,422,{error:String(e.message).slice(0,250)});}finally{pending.delete(abort);}
  });
  server.on('error',e=>{health='listener failed: '+e.code;});
- server.listen(0,'127.0.0.1',async()=>{port=server.address().port;listeners.set(port,token);try{await syncEngine(config,port,token);ready();}catch(e){health='engine config failed: '+e.message;}});
+ server.listen(0,'127.0.0.1',async()=>{port=server.address().port;listeners.set(port,token);try{await migratePolicyScope();await syncEngine(config,port,token);ready();}catch(e){health='engine config failed: '+e.message;}});
  const learningTimer=setInterval(()=>{void harvester.pump();void maybeLearnedReplay();},60000);learningTimer.unref?.();
  ctx.effect(()=>async()=>{disposed=true;clearInterval(learningTimer);harvester.dispose();for(const c of pending)c.abort(Error("Host stopping"));
   try{await changePolicy(s=>s.lease?.hostId===hostId?{...s,lease:null}:null);}catch{}listeners.delete(port);server.close();try{await syncEngine(()=>({...config(),enabled:false}),port,token,validateEngine,true);}catch{}});

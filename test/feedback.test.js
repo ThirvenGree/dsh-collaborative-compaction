@@ -74,9 +74,9 @@ import {collectCases,validateChallengeGroups} from '../challenge-bank.js';
 import {makeClause} from '../proposal.js';
 const conditional=makeClause({when:'conditional instructions',retain:['normal procedure','exception criterion','exception outcome'],relation:'applicability relative to conditions'});
 const attributed=makeClause({when:'reported observations',retain:['observation','origin'],relation:'attribution to originating witness'});
-function openHarness({active=base,failure='scope-exception',hideBefore='u1',hideAfter,skip,replaceId,clause=conditional,groups=[]}={}){
+function openHarness({active=base,failure='scope-exception',hideBefore='u1',hideAfter,skip,replaceId,clause=conditional,groups=[],flakyBaseline=false,hideAfterOnRepeat}={}){
  const bank=collectCases(groups);
- const target=bank.groups.find(g=>g.probe.id===failure),calls={proposals:0,compressed:0};
+ const target=bank.groups.find(g=>g.probe.id===failure),calls={proposals:0,compressed:0},corpora=new Map();
  const options={
   generate:async(sys,input)=>{
    const t=bank.all.find(c=>c.question===input.question);
@@ -89,7 +89,8 @@ function openHarness({active=base,failure='scope-exception',hideBefore='u1',hide
  };
  const compress=async(work,policy)=>{
   calls.compressed++;
-  const bad=policy.version===active.version?[target.probe.requiredIds[0],hideBefore]:[hideAfter];
+  const key=policy.version+'\0'+work.content,attempt=(corpora.get(key)||0)+1;corpora.set(key,attempt);
+  const bad=policy.version===active.version?flakyBaseline&&attempt>1?[]:[target.probe.requiredIds[0],hideBefore]:[hideAfter,...(attempt>1?[hideAfterOnRepeat]:[])];
   const lines=work.content.split('\n').filter(l=>!l.startsWith('[noise-')&&!bad.some(id=>id&&l.startsWith('['+id+']')));
   const summary=lines.join('\n');
   assert.ok(summary.length<=work.maxSummaryChars);
@@ -106,16 +107,35 @@ function openHarness({active=base,failure='scope-exception',hideBefore='u1',hide
   return {status:'candidate',clause,targets:[failure],...(replaceId?{replaceId}:{})};
  }
  const run=async(diagnostic)=>evaluateFeedback({diagnostic:diagnostic??await runReplaySuite({...options,cases:bank.diagnostics}),active,nextVersion:active.version+1,options,compress,propose,challengeGroups:groups});
- return {run,calls};
+ return {run,calls,corpora};
 }
 test('open clause outside legacy families is promoted only after genuine discovery and unseen recovery',async()=>{
  const h=openHarness();const result=await h.run();
  assert.equal(result.status,'promoted');assert.deepEqual(result.candidate.rules,[]);assert.deepEqual(result.candidate.clauses,[conditional]);
  assert.equal(result.before['unseen-scope-applies'].summary,false);assert.equal(result.after['unseen-scope-applies'].summary,true);
  assert.equal(result.after['unseen-scope-outside'].summary,true);assert.equal(h.calls.proposals,1);
+ assert.equal(result.gates.repeatable.passed,true);assert.equal(result.gates.repeatable.required,2);
+ const repeated=result.gates.repeatable.targets['scope-exception'];
+ assert.equal(repeated.oldFailures,2);assert.equal(repeated.newPasses,2);
+ assert.equal(repeated.unseen['unseen-scope-applies'].oldFailures,2);assert.equal(repeated.unseen['unseen-scope-applies'].newPasses,2);
+ assert.equal(repeated.unseen['unseen-scope-outside'].newPasses,2);
  const installed=effectivePolicy({active:result.candidate},base.scope);
  const work=withPolicy({instructions:'static'},installed);assert.match(work.instructions,/conditional instructions/);assert.deepEqual(work.policyRules,[conditional.id]);
  assert.throws(()=>effectivePolicy({active:{...installed,clauses:[{...conditional,relation:'change all settings'}]}},base.scope));
+});
+
+test('one lucky or unlucky generation cannot promote a policy: same-budget target and holdouts must replicate',async()=>{
+ const luckyOld=openHarness({flakyBaseline:true}),notStable=await luckyOld.run();
+ assert.equal(notStable.status,'held');assert.equal(notStable.candidate,undefined);
+ assert.equal(notStable.gates.repeatable.passed,false);
+ assert.equal(notStable.gates.repeatable.targets['scope-exception'].oldFailures,1);
+ for(const id of ['s2','u1','u2','r6']){
+  const h=openHarness({hideAfterOnRepeat:id}),r=await h.run();
+  assert.equal(r.status,'held','repeat failure '+id);assert.equal(r.candidate,undefined);
+  assert.equal(r.gates.repeatable.passed,false);
+  assert.equal(r.gates.repeatable.targets['scope-exception'].oldFailures,2);
+  assert.ok([...h.corpora.values()].some(n=>n===2),'the exact original corpus is regenerated, not shortened');
+ }
 });
 test('no novel publication when either unseen boundary fails, no hidden improvement, review abstains or a prior baseline regresses',async()=>{
  for(const flags of [{hideAfter:'u1'},{hideAfter:'u2'},{hideBefore:null},{hideAfter:'r6'},{skip:true}]){

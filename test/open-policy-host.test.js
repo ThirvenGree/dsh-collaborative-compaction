@@ -145,6 +145,21 @@ test('newly reported evidence dependency can become a scoped production strategy
   assert((await ordinary()).includes(clauseOne.relation));
   const baseline=(await state()).replay.policy.active;
   assert.ok(baseline.version>0);assert.equal(baseline.clauses.length,1);
+  const initialState=await state(),originalModel=initialState.config.aModel;
+  const settings=async changes=>{
+   const before=await state();
+   const response=await apiPost(settingsUrl(),{changes},{'x-dsh-compaction-csrf':before.csrf});
+   assert.equal(response.status,200);return response.json();
+  };
+  const operational=await settings({timeoutMs:initialState.config.timeoutMs-1000,retries:1});
+  assert.equal(operational.replay.effectivePolicy.version,baseline.version);
+  assert.equal(operational.replay.scope.status,'matched');
+  const changed=await settings({aModel:'different-summary-model'});
+  assert.equal(changed.replay.effectivePolicy.version,0);
+  assert.equal(changed.replay.scope.status,'mismatch');assert(changed.replay.scope.changedFields.includes('aModel'));
+  assert.equal(changed.replay.policy.active.version,baseline.version,'scope mismatch must preserve learned clauses');
+  await settings({aModel:originalModel,timeoutMs:initialState.config.timeoutMs,retries:initialState.config.retries});
+  assert.equal((await state()).replay.effectivePolicy.version,baseline.version);
   await stop();await start();
   assert((await ordinary()).includes(clauseOne.relation),'the stored general clause must reach production after restart');
   for(phase of ['forged','overfit','unavailable','bank-changed']){

@@ -1,7 +1,8 @@
 {
   "name": "dsh-collaborative-compaction",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
+  "packageManager": "npm@10.9.7",
   "main": "host.js",
   "exports": {
     ".": "./host.js",
@@ -40,11 +41,15 @@
     "runtime.js",
     "replay.js",
     "feedback.js",
+    "policy-scope.js",
+    "replay-schedule.js",
     "proposal.js",
     "harvest.js",
     "harvest-runner.js",
     "dynamic-bank.js",
     "challenge-bank.js",
+    ".node-version",
+    "scripts/check-dependencies.mjs",
     "examples/feedback-cases.json",
     "token-budget.js",
     "token-worker.js",
@@ -59,6 +64,6 @@
     "replay-live.mjs"
   ],
   "dependencies": {
-    "js-tiktoken": "^1.0.21"
+    "js-tiktoken": "1.0.21"
   }
 }

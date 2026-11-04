@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {fixtureCases,runReplaySuite} from './replay.js';
+import {fixtureCases,runReplaySuite,mapReplayTasks} from './replay.js';
 import {collectCases,bankControl,citedSpans} from './challenge-bank.js';
 import {validateClause,renderClause} from './proposal.js';
 export {collectCases,validateChallengeGroups} from './challenge-bank.js';
@@ -32,8 +32,8 @@ const background=[
 ];
 export const validationCases=builtIns.all;
 export const diagnosticCases=builtIns.diagnostics;
-export const scopeOf=c=>createHash('sha256').update(JSON.stringify(Object.entries(c).filter(([k])=>!['replayFeedbackEnabled','replayHarvestEnabled'].includes(k)).sort(([a],[b])=>a.localeCompare(b)))).digest('hex');
-export const emptyPolicy=()=>({schema:1,revision:0,active:{version:0,rules:[],scope:null},previous:null,last:null,lease:null,lastAttempt:0});
+export {scopeOf} from './policy-scope.js';
+export const emptyPolicy=()=>({schema:1,revision:0,active:{version:0,rules:[],scope:null},previous:null,last:null,lease:null,lastAttempt:null});
 function checkedClauses(clauses=[]){
  if(!Array.isArray(clauses)||clauses.length>4)throw Error('Invalid learned compression policy');
  const checked=clauses.map(c=>validateClause(c));
@@ -66,9 +66,9 @@ const stop=report=>report.probes.flatMap(p=>Object.values(p.lanes)).find(l=>l.er
 function chunks(list,size=4){
  return Array.from({length:Math.ceil(list.length/size)},(_,i)=>list.slice(i*size,(i+1)*size));
 }
-async function regenerated(suites,policy,{options,compress}){
+async function regenerated(suites,policy,{options,compress,onlyIds}){
  const cases=[],summaries=new Map();
- for(const suite of suites){
+ const batches=await mapReplayTasks(suites,async suite=>{
   options.signal?.throwIfAborted();
   const source=suite.flatMap(x=>x.records);
   const noise=background.map((text,i)=>({id:'noise-'+i,role:'assistant',text}));
@@ -76,8 +76,9 @@ async function regenerated(suites,policy,{options,compress}){
   const content=records.map(r=>'['+r.id+'] '+r.text).join('\n');
   const summary=await compress({content,reference:'',instructions:'Summarize the current decisions and task state. Cite relevant record IDs as [id] alongside short exact evidence where available.',trigger:'calibration',minSummaryChars:1,maxSummaryChars:420},policy);
   const summaryCitations=citedSpans(summary,records);
-  for(const t of suite){cases.push({...t,records,summary,summaryCitations});summaries.set(t.id,summary);}
- }
+  return suite.filter(t=>!onlyIds||onlyIds.has(t.id)).map(t=>({...t,records,summary,summaryCitations}));
+ },{signal:options.signal});
+ for(const batch of batches)for(const test of batch){cases.push(test);summaries.set(test.id,test.summary);}
  const report=await runReplaySuite({...options,cases});
  if(stop(report))throw Error(stop(report).error);
  return {before:quality(report.probes),summaries,report};
@@ -126,7 +127,33 @@ async function modelFeedback({active,nextVersion,options,compress,propose},bank)
  });
  const proof={before,after,gates:{noRegression,control,recovered},proposed:[clause.id],targets,...(replaceId?{replaceId}:{})};
  if(!noRegression||!control||recovered.length!==targets.length)return unchanged('新提案未同时修复复现题和未见题、守住边界反例以及其他基线。',proof);
- return {status:'promoted',reason:'模型提出的条款已通过独立审核，改进了复现题和未见场景，边界反例与其余对照均无退步。',...proof,candidate};
+ // Retest the actual compressor, not merely the same saved summary. Keep each original
+ // corpus and character budget unchanged so a smaller/easier batch cannot fake replication.
+ const repeatIds=new Set([bankControl.id,...targets.flatMap(id=>{
+  const group=bank.groups.find(g=>g.probe.id===id);return [id,group.positive.id,group.counter.id];
+ })]);
+ const repeatSuites=[...discoverySuites,...hiddenSuites].filter(suite=>suite.some(t=>repeatIds.has(t.id)));
+ const {before:repeatBefore}=await regenerated(repeatSuites,active,{options,compress,onlyIds:repeatIds});
+ const counts=Object.fromEntries(targets.map(id=>{
+  const {positive,counter}=bank.groups.find(g=>g.probe.id===id);
+  return [id,{oldFailures:Number(!before[id].summary)+Number(!repeatBefore[id].summary),
+   unseen:Object.fromEntries([positive.id,counter.id].map(key=>[key,{oldFailures:Number(!before[key].summary)+Number(!repeatBefore[key].summary)}]))}];
+ }));
+ const oldStable=Object.values(repeatBefore).every(q=>q.full)&&targets.every(id=>counts[id].oldFailures===2&&Object.values(counts[id].unseen).some(q=>q.oldFailures===2));
+ proof.repeat={before:repeatBefore};
+ proof.gates.repeatable={required:2,passed:false,targets:counts};
+ if(!oldStable)return unchanged('目标题或未见题的旧策略失误未能重复两次，可能是采样波动，保留现行策略。',proof);
+ const {before:repeatAfter}=await regenerated(repeatSuites,candidate,{options,compress,onlyIds:repeatIds});
+ proof.repeat.after=repeatAfter;
+ for(const id of targets){
+  counts[id].newPasses=Number(after[id].full&&after[id].summary&&after[id].retrieval)+Number(repeatAfter[id].full&&repeatAfter[id].summary&&repeatAfter[id].retrieval);
+  for(const key of Object.keys(counts[id].unseen))counts[id].unseen[key].newPasses=Number(after[key].full&&after[key].summary&&after[key].retrieval)+Number(repeatAfter[key].full&&repeatAfter[key].summary&&repeatAfter[key].retrieval);
+ }
+ const stable=targets.every(id=>counts[id].newPasses===2&&Object.values(counts[id].unseen).every(q=>q.newPasses===2))&&
+  repeatAfter[bankControl.id].summary&&repeatAfter[bankControl.id].retrieval&&!regressed(repeatBefore,repeatAfter);
+ proof.gates.repeatable.passed=!!stable;
+ if(!stable)return unchanged('候选在第二次独立压缩与回放中未能保持改进或守住对照，保留现行策略。',proof);
+ return {status:'promoted',reason:'模型提案已通过独立审核；旧策略遗漏和候选改进重复两次成立，未见正例、边界反例与对照均通过。',...proof,candidate};
 }
 export async function evaluateFeedback(args){
  const {diagnostic,active,nextVersion,options,compress,propose,challengeGroups=[]}=args;

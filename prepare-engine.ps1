@@ -15,6 +15,8 @@ try {
     CheckExit
     npm.cmd ci --ignore-scripts
     CheckExit
+    node (Join-Path $PSScriptRoot 'scripts/check-dependencies.mjs') . --sqlite
+    CheckExit
     npm.cmd run build
     CheckExit
     node --import tsx --test tests/collaborative-transaction.test.ts tests/external-summary-runtime.test.ts tests/search-original-evidence.test.ts tests/search-context-cross-session.test.ts tests/ccr-plugin.test.ts

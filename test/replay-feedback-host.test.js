@@ -10,7 +10,7 @@ const engine=process.env.COLLAB_TEST_ENGINE||path.resolve(import.meta.dirname,'.
 const engineInstalled=fs.existsSync(path.join(engine,'dist/external-summary-settings.js'));
 
 // Exercise both plugin HTTP paths with the installed engine's search. Only the model is simulated.
-test('ordinary compression triggers calibration; the next request and restarted host use the promoted policy',
+test('first compression waits for manual calibration; later automatic replay and restarted host retain the policy',
  {skip:engineInstalled?false:'Build the patched engine and set COLLAB_TEST_ENGINE to run the HTTP integration.',timeout:30000},async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'collab-policy-http-'));
  const env={DSH_HOME:path.join(dir,'home'),DSH_COLLAB_TEST_HOME:dir,BILI_CONFIG_FILE:path.join(dir,'engine.json'),DSH_PROFILE_DIR:undefined,LOCAL_REPLAY_TEST_KEY:'fixture-only'};
@@ -65,19 +65,30 @@ test('ordinary compression triggers calibration; the next request and restarted 
   fs.rmSync(hostFile,{force:true});
   apply({effect:fn=>{const off=fn();if(typeof off==='function')cleanup.push(off);},llm:{stream},webServer:{register:()=>()=>{}}});
   const {port}=await untilFile(hostFile),token=fs.readFileSync(path.join(dir,'local-token'),'utf8');
-  return async content=>{
+  const compress=async content=>{
    const res=await fetch('http://127.0.0.1:'+port+'/v1/chat/completions',{method:'POST',
     headers:{authorization:'Bearer '+token,'content-type':'application/json'},
     body:JSON.stringify({model:'dsh-collaborative-v1',metadata:{dsh_compaction:{version:1,trigger:'auto',maxSummaryChars:300}},
      messages:[{role:'user',content:JSON.stringify({content})}]})});
    const body=await res.json();assert.equal(res.status,200,JSON.stringify(body));assert.equal(body.choices[0].message.content,content);
   };
+  compress.calibrate=async()=>{
+   const response=await fetch('http://127.0.0.1:'+port+'/v1/replay',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:'{}'});
+   assert.equal(response.status,200);return response.json();
+  };
+  return compress;
  };
  try{
   const compress=await start();await compress('隔离收据，第一次正常压缩。');
-  const report=await untilFile(path.join(dir,'fixture-replay.json'));
-  assert.equal(report.feedback.origin,'auto');assert.equal(report.feedback.status,'promoted',report.feedback.reason);
+  await delay(80);assert.equal(fs.existsSync(path.join(dir,'fixture-replay.json')),false,'first successful compression must not secretly calibrate');
+  const report=await compress.calibrate();
+  assert.equal(report.feedback.origin,'manual');assert.equal(report.feedback.status,'promoted',report.feedback.reason);
+  assert.ok(report.telemetry.elapsedMs>=0);assert.ok(report.telemetry.readerCalls>0);assert.ok(report.telemetry.pipelineCalls>0);
+  const policyFile=path.join(dir,'compression-policy.json'),policy=JSON.parse(fs.readFileSync(policyFile,'utf8'));
+  assert.ok(policy.manualBaselineAt>0);policy.lastCompletedAt=Date.now()-8*86400000;policy.manualBaselineAt=policy.lastCompletedAt;
+  fs.writeFileSync(policyFile,JSON.stringify(policy));fs.unlinkSync(path.join(dir,'fixture-replay.json'));
   await compress('隔离收据，第二次正常压缩。');
+  assert.equal((await untilFile(path.join(dir,'fixture-replay.json'))).feedback.origin,'auto');
   await stop();const afterRestart=await start();await afterRestart('隔离收据，重载后的正常压缩。');
   assert.deepEqual(seen,[false,true,true]);
  }finally{await stop();}

@@ -136,7 +136,7 @@ test('authenticated production compression learns isolated synthetic cases, repl
 
   // Prevent the unrelated weekly schedule; this run must be caused specifically by admitting
   // a new learned case. The normal production endpoint still initiates the whole chain.
-  fs.writeFileSync(path.join(dir,'compression-policy.json'),JSON.stringify({...emptyPolicy(),lastAttempt:Date.now()}));
+  fs.writeFileSync(path.join(dir,'compression-policy.json'),JSON.stringify({...emptyPolicy(),lastAttempt:Date.now(),lastCompletedAt:Date.now(),manualBaselineAt:Date.now()-2*86400000}));
   await settings({replayFeedbackEnabled:true});phase='second';await compress('这是一段新的独立来源。');
   const replay=await until(()=>{
    if(!fs.existsSync(reportFile))return false;
