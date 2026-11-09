@@ -174,10 +174,11 @@ async function modelFeedback({active,nextVersion,options,compress,propose},bank)
  return {status:'promoted',reason:'模型提案已通过独立审核；旧策略遗漏和候选改进重复两次成立，未见正例、边界反例与对照均通过。',...proof,candidate};
 }
 export async function evaluateFeedback(args){
- const {diagnostic,active,nextVersion,options,compress,propose,challengeGroups=[]}=args;
+ const {diagnostic,active,nextVersion,options,compress,propose,challengeGroups=[],base}=args;
  const unavailable=stop(diagnostic);
  if(unavailable)return {status:'unavailable',reason:unavailable.error};
- const bank=collectCases(challengeGroups);
+ // 2026-11-07: the job's base (freshly generated questions, or the built-in ones) decides the bank.
+ const bank=collectCases(challengeGroups,base);
  const diagnostics=propose?bank.diagnostics:fixtureCases;
  if(diagnostic.probes.length!==diagnostics.length||!diagnostics.every(c=>diagnostic.probes.some(p=>p.id===c.id&&p.lanes.full.pass)))
   return unchanged('诊断的原文对照不足，不能归因于压缩策略。');

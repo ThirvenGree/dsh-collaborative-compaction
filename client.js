@@ -206,6 +206,86 @@ const CSS=`
  .dcc-run>summary{grid-template-columns:auto auto minmax(0,1fr) auto;row-gap:6px}
  .dcc-run>summary .dcc-detail{grid-column:1/-1}
 }
+.dcc-sem-hero{margin-top:4px;border:1px solid var(--dcc-line);border-radius:16px;padding:20px 20px 18px;background:var(--dcc-soft)}
+.dcc-sem-title{font-size:1.125rem;line-height:1.35;font-weight:650;margin:0}
+.dcc-sem-notice{margin:12px 0 0;font-size:.875rem;color:var(--dcc-muted);max-width:52em}
+.dcc-issue{display:flex;gap:12px;align-items:flex-start;margin-top:14px;padding:12px 14px;border-radius:12px;border:1px solid color-mix(in srgb,var(--dcc-bad) 32%,transparent);background:color-mix(in srgb,var(--dcc-bad) 7%,transparent)}
+.dcc-issue-icon{flex:none;width:22px;height:22px;margin-top:1px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:.8125rem;line-height:1;color:#fff;background:var(--dcc-bad)}
+.dcc-issue-body{min-width:0}
+.dcc-issue strong{display:block;font-weight:620;color:color-mix(in srgb,var(--dcc-bad) 70%,currentColor)}
+.dcc-issue p{margin:2px 0 0;font-size:.875rem}
+.dcc-issue code{display:inline-block;margin-top:6px;padding:1px 7px;border-radius:6px;background:var(--dcc-soft);font-family:var(--dcc-mono);font-size:.75rem;color:var(--dcc-muted);word-break:break-all}
+.dcc-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px}
+.dcc-btn-sm{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;font-size:.875rem;line-height:1.5;font-weight:550}
+.dcc-btn-quiet{margin-left:auto;border-style:dashed;color:var(--dcc-muted)!important}
+.dcc-btn-quiet:not(:disabled):hover{color:inherit!important}
+.dcc-btn-count{min-width:1.6em;padding:0 6px;border-radius:999px;font-size:.75rem;line-height:1.5;text-align:center;font-weight:600;background:color-mix(in srgb,var(--dcc-bad) 15%,transparent);color:color-mix(in srgb,var(--dcc-bad) 85%,currentColor)}
+.dcc-btn-primary .dcc-btn-count{background:rgba(255,255,255,.24);color:#fff}
+.dcc-sep{width:1px;height:20px;background:var(--dcc-line-strong);margin:0 2px}
+.dcc-sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:6px 12px;flex-wrap:wrap}
+.dcc-sec-head h3{font-size:1rem;font-weight:620;margin:0}
+.dcc-sec-meta{font-size:.8125rem;color:var(--dcc-muted)}
+.dcc-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0 18px}
+.dcc-stat{min-width:0;border:1px solid var(--dcc-line);border-radius:12px;padding:12px 14px 13px;display:flex;flex-direction:column;gap:2px}
+.dcc-stat-label{font-size:.8125rem;color:var(--dcc-muted)}
+.dcc-stat-num{font-size:1.5rem;line-height:1.2;font-weight:650}
+.dcc-stat.is-ok .dcc-stat-num{color:color-mix(in srgb,var(--dcc-ok) 82%,currentColor)}
+.dcc-stat.is-wait .dcc-stat-num{color:color-mix(in srgb,var(--dcc-accent) 82%,currentColor)}
+.dcc-stat.is-bad{border-color:color-mix(in srgb,var(--dcc-bad) 38%,transparent);background:color-mix(in srgb,var(--dcc-bad) 6%,transparent)}
+.dcc-stat.is-bad .dcc-stat-num{color:color-mix(in srgb,var(--dcc-bad) 85%,currentColor)}
+.dcc-modal th.is-num,.dcc-modal td.is-num{text-align:right;padding-right:18px;white-space:nowrap}
+.dcc-modal td.is-bad{color:color-mix(in srgb,var(--dcc-bad) 85%,currentColor);font-weight:600}
+.dcc-modal td,.dcc-modal th{vertical-align:middle}
+.dcc-dim{color:var(--dcc-muted)}
+.dcc-mix-cell{width:36%}
+.dcc-mix{display:flex;height:6px;border-radius:999px;overflow:hidden;background:var(--dcc-line)}
+.dcc-mix span{display:block;height:100%}
+.dcc-mix .is-done,.dcc-legend .is-done{background:var(--dcc-ok)}
+.dcc-mix .is-wait,.dcc-legend .is-wait{background:color-mix(in srgb,var(--dcc-accent) 55%,transparent)}
+.dcc-mix .is-fail,.dcc-legend .is-fail{background:var(--dcc-bad)}
+.dcc-legend{display:inline-flex;align-items:center;gap:5px;font-weight:400;font-size:.75rem;white-space:nowrap}
+.dcc-legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-left:6px}
+.dcc-legend i:first-child{margin-left:0}
+.dcc-kv-sem{margin:18px 0 0}
+.dcc-kv-sem dd{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dcc-inline{display:inline-flex;align-items:center;gap:6px}
+.dcc-inline .dcc-dot{width:6px;height:6px}
+.dcc-text-ok{color:color-mix(in srgb,var(--dcc-ok) 82%,currentColor)}
+.dcc-text-warn{color:color-mix(in srgb,var(--dcc-warn) 85%,currentColor)}
+.dcc-semantic .dcc-hint{margin-top:12px}
+.dcc-semantic .dcc-raw pre{max-height:260px}
+.dcc-toggles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px;margin:2px 0 4px}
+.dcc-toggles .dcc-toggle-row{margin:0;border-top:0}
+.dcc-toggle-row.is-changed strong::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--dcc-accent);margin-left:7px;vertical-align:middle}
+.dcc-sem-block{margin-top:24px}
+.dcc-sem-block h4{font-size:.9375rem;font-weight:620;margin:0 0 12px}
+.dcc-sem-block h4:has(+.dcc-sub){margin-bottom:0}
+.dcc-sem-block .dcc-sub{margin:2px 0 12px}
+.dcc-field.is-wide{grid-column:1/-1}
+.dcc-input.is-area{align-items:stretch}
+.dcc-input textarea{flex:1;min-width:0;border:0;background:transparent;color:inherit;font:inherit;padding:8px 10px;outline:none;resize:vertical;min-height:4.6em}
+.dcc-input.is-mono textarea{font-family:var(--dcc-mono);font-size:.875rem}
+.dcc-input input[type=number]{-moz-appearance:textfield}
+.dcc-input input[type=number]::-webkit-inner-spin-button,.dcc-input input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+@container (max-width:760px){
+ .dcc-semantic .dcc-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px}
+ .dcc-kv-sem{grid-template-columns:8.5em minmax(0,1fr);gap:6px 14px}
+ .dcc-kv-sem dd{margin-bottom:0}
+ .dcc-mix-cell{width:28%}
+ .dcc-stat{padding:10px 12px}
+ .dcc-stat-num{font-size:1.25rem}
+}
+@container (max-width:560px){
+ .dcc-toggles{grid-template-columns:minmax(0,1fr)}
+ .dcc-btn-quiet{margin-left:0}
+}
+@container (max-width:440px){
+ .dcc-semantic .dcc-grid{grid-template-columns:minmax(0,1fr)}
+ .dcc-mix-cell{display:none}
+ .dcc-kv-sem{grid-template-columns:minmax(0,1fr);gap:2px}
+ .dcc-kv-sem dd{margin-bottom:8px}
+ .dcc-sem-hero{padding:16px 14px}
+}
 @media (prefers-reduced-motion:reduce){.dcc *{transition:none!important}}
 `;
 
@@ -433,7 +513,7 @@ function Runs({runs,notice,onRefresh}){
   })));
 }
 
-const replayLabels={'omitted-tool':'原工具名','later-correction':'后续更正','unconfirmed-click':'操作未确认','adequate-summary-control':'摘要充足对照','execution-error':'调用出错','baseline-inconclusive':'原文对照未通过','summary-sufficient':'摘要足够','retrieval-regression':'回查组退步','citation-recovered':'回查补齐引用','correct-answer-without-grounding':'行为正确但引文不足','recovered-by-recall':'回查恢复','did-not-search':'未发起回查','search-missed-evidence':'未查到关键依据','evidence-returned-answer-failed':'已查到依据但没有正确使用'};
+const replayLabels={'fresh-identifier':'新题·原工具名','fresh-correction':'新题·后续更正','fresh-receipt':'新题·操作未确认','fresh-scope':'新题·范围例外','scope-exception':'范围例外','omitted-tool':'原工具名','later-correction':'后续更正','unconfirmed-click':'操作未确认','adequate-summary-control':'摘要充足对照','execution-error':'调用出错','baseline-inconclusive':'原文对照未通过','summary-sufficient':'摘要足够','retrieval-regression':'回查组退步','citation-recovered':'回查补齐引用','correct-answer-without-grounding':'行为正确但引文不足','recovered-by-recall':'回查恢复','did-not-search':'未发起回查','search-missed-evidence':'未查到关键依据','evidence-returned-answer-failed':'已查到依据但没有正确使用'};
 const scopeFieldLabels=Object.fromEntries(GROUPS.flatMap(group=>group.fields.map(([key,label])=>[key,label])).concat([
  ['claudeEnabled','Claude 摘要开关'],['reviewEnabled','交叉审核开关'],['factCheckEnabled','事实核验开关']
 ]));
@@ -528,6 +608,7 @@ function DiagnosticCard({report}){
  return h('section',{className:'dcc-card dcc-section','aria-labelledby':'dcc-diag-title'},
   h('div',{className:'dcc-card-head'},h('div',null,h('h3',{id:'dcc-diag-title'},'最近一次三路诊断'),
    h('p',{className:'dcc-card-kicker'},report?report.provider+' / '+report.model+' · '+clock(report.at):'同一道题分别给阅读模型完整原文、只给摘要、给摘要并允许回查'))),
+  report?.questions?h('p',{className:'dcc-hint'},report.questions.source==='generated'?'题目：本轮由模型新出'+(report.questions.theme?'（主题「'+report.questions.theme+'」）':'')+' · '+report.questions.groups+' 组题组 + 1 道对照'+(report.questions.attempts>1?' · 第 '+report.questions.attempts+' 次生成通过检查':''):'题目：使用内置题'+(report.questions.reason?'（'+report.questions.reason+'）':'')):null,
   probes.length?h('div',{className:'dcc-table-wrap'},h('table',{className:'dcc-table'},
    h('thead',null,h('tr',null,['问题','结论','原文','摘要','可回查'].map(x=>h('th',{key:x,scope:'col'},x)))),
    h('tbody',null,probes.map(p=>h('tr',{key:p.id},
@@ -548,6 +629,8 @@ function HarvestBank({state,draft,set,onAction}){
    h('span',{className:'dcc-pill dcc-tone-'+tone,role:'status'},current)),
   h('div',{className:'dcc-toggle-row'},h(Switch,{checked:!!draft.replayHarvestEnabled,label:'从正式压缩中提炼脱敏回放样例',onChange:v=>set('replayHarvestEnabled',v)}),
    h('div',null,h('strong',null,'自动提炼脱敏样例'),h('span',null,'提炼开关保留默认开启，但必须同时启用交叉审核才能运行。关闭交叉审核会取消正在处理的提炼并清空待处理原文；重新开启后只处理新任务。'))),
+  h('div',{className:'dcc-toggle-row'},h(Switch,{checked:draft.replayFreshQuestions!==false,label:'每次回放新出一套题',onChange:v=>set('replayFreshQuestions',v)}),
+   h('div',null,h('strong',null,'每次回放新出一套题'),h('span',null,'每个回放任务开始时，由生成模型新出 4 组虚构题组和 1 道对照题，经程序校验和独立审核后使用；不合格时用内置题。会多用 2–4 次模型调用（计入回放预算），分段续跑沿用同一套题。关闭后固定使用内置题。'))),
   info?.blockedReason?h('div',{className:'dcc-callout is-warn',role:'status'},h('p',null,info.blockedReason)):null,
   h('div',{className:'dcc-callout'},
    h('p',null,h('strong',null,'原文发送范围'),'：最多 120,000 字符的本次正式压缩原文及候选摘要，会交给生成模型 '+(state?.config?.aProvider||'DSH')+' / '+(state?.config?.aModel||'当前模块 A 模型')+'，并交给独立审核模型 '+(info?.reviewModel||state?.config?.reviewModel||'当前审核模型')+'。'),
@@ -591,7 +674,7 @@ function tabBadge(keys,changes,errors){
  return bad?h('span',{className:'dcc-count dcc-tone-bad'},bad+' 项需修改'):changed?h('span',{className:'dcc-count dcc-tone-accent'},changed+' 项未保存'):null;
 }
 const SETTINGS_KEYS=new Set(GROUPS.filter(g=>!g.tab).flatMap(g=>g.fields.map(([k])=>k)));
-const LEARNING_KEYS=new Set([...GROUPS.filter(g=>g.tab==='learning').flatMap(g=>g.fields.map(([k])=>k)),'replayFeedbackEnabled','replayHarvestEnabled']);
+const LEARNING_KEYS=new Set([...GROUPS.filter(g=>g.tab==='learning').flatMap(g=>g.fields.map(([k])=>k)),'replayFeedbackEnabled','replayHarvestEnabled','replayFreshQuestions']);
 const TABS=[['settings','设置'],['semantic','语义与媒体检索'],['learning','学习与校准'],['runs','运行记录']];
 const SEMANTIC_FIELDS=[
  ['model','向量模型','text'],['dimensions','向量维度','dimensions'],['keyEnv','密钥环境变量名','text'],
@@ -604,7 +687,26 @@ const SEMANTIC_FIELDS=[
  ['allowedMediaRoots','允许读取的媒体目录，每行一个','array'],['selectedSessions','后台索引会话 ID，每行一个','array'],
  ['mediaMaxBytes','单个媒体文件字节上限','number'],['mediaMaxPages','每批 PDF 页数预算','number'],['mediaMaxSeconds','每段音视频时长预算 / 秒','number']
 ];
-const SEMANTIC_BOOL=[['enabled','启用语义召回'],['mediaEnabled','处理图片、音频、视频和 PDF'],['relevanceEnabled','按需核对语义证据'],['secondHopEnabled','证据不足时允许第二跳检索']];
+const SEMANTIC_BOOL=[['enabled','启用语义召回','按意思找回相关经历，与全文索引融合排序'],['mediaEnabled','处理图片、音频、视频和 PDF','只处理已与消息关联的原件'],['relevanceEnabled','按需核对语义证据','检索结果交给重排模型确认是否相关'],['secondHopEnabled','证据不足时允许第二跳检索','沿第一轮线索再查一次']];
+const SEMANTIC_GROUPS=[
+ {title:'模型与密钥',keys:['model','dimensions','keyEnv','relevanceModel']},
+ {title:'检索与排序',sub:'影响每次检索取多少候选、怎样融合。',keys:['candidateLimit','rrfK','maxProbes','chunkChars','queryTimeoutMs','relevanceTimeoutMs']},
+ {title:'资源保护',sub:'后台索引的请求预算、并发和超时。',keys:['maxRequestsPerMinute','maxDailyRequests','concurrency','retries','requestTimeoutMs']},
+ {title:'媒体处理',keys:['ffmpegPath','ffprobePath','mediaMaxBytes','mediaMaxPages','mediaMaxSeconds','allowedMediaRoots']},
+ {title:'索引范围',keys:['selectedSessions']}
+];
+const SEMANTIC_MODALITIES=[['text','文本经历'],['image','图片原件'],['audio','音频片段'],['video','视频画面'],['pdf','PDF 页面']];
+// Turn provider errors into a cause and a next step; the raw message stays visible underneath.
+function semanticIssue(text){
+ const s=String(text||''),code=(s.match(/HTTP\s*(\d{3})/i)||[])[1];
+ if(code==='402')return ['Gemini 预付余额不足','向量服务拒绝了请求（HTTP 402），后台索引暂时无法生成新向量。充值后点「重试失败项」，失败的资料会重新排队。',true];
+ if(code==='401'||code==='403')return ['向量服务拒绝了密钥','密钥无效或没有权限（HTTP '+code+'）。请检查下方「密钥环境变量名」指向的值。',true];
+ if(code==='429')return ['请求太频繁或超出配额','向量服务暂时限流（HTTP 429）。队列会退避后自动重试；也可以调低每分钟请求预算。',true];
+ if(code&&code[0]==='5')return ['向量服务暂时不可用','Google 侧返回 HTTP '+code+'，通常稍后会恢复。恢复后可以点「重试失败项」。',true];
+ if(/未配置环境变量/.test(s))return ['还没有可用的密钥',s+'。设置好后点「刷新状态」核对。',false];
+ if(/引擎/.test(s))return ['语义索引引擎未就绪',s,false];
+ return ['语义索引遇到问题',s,false];
+}
 function Semantic({active}){
  const [value,setValue]=R.useState(null),[draft,setDraft]=R.useState(null),[error,setError]=R.useState(''),[busy,setBusy]=R.useState(false),[notice,setNotice]=R.useState('');
  const saved=R.useRef(null),edited=R.useRef(null),sequence=R.useRef(0),working=R.useRef(false);edited.current=draft;
@@ -641,27 +743,74 @@ function Semantic({active}){
  }
  const status=value?.status,stale=status?.updatedAt&&Date.now()-status.updatedAt>30000;
  const flag=!value?.config?'等待引擎':!value.config.enabled?'未启用':status?.paused?'已暂停':stale?'最近状态已过期':status?.running?'后台运行中':'等待检索任务';
+ const problem=error||value?.health||'';
+ const tone=problem?'bad':!value?.config||!value.config.enabled?'neutral':status?.paused||stale?'warn':status?.running?'accent':'ok';
  const phase=status?.phase||'尚无任务';
  const per=status?.modalities??status?.perModality??{};
+ const num=v=>Number.isFinite(Number(v))?Number(v):0;
+ const indexed=num(status?.indexed),pending=num(status?.pending),failed=num(status?.failed);
+ const lead=status?.paused?'resume':failed?'retry':'';
+ const discard=()=>{setDraft(saved.current);setNotice('');};
+ const rebuild=()=>{const ask=typeof window!=='undefined'&&typeof window.confirm==='function'?window.confirm:null;if(!ask||ask('重建派生索引会为已选择的资料重新生成语义向量，会消耗 Gemini 请求额度；原文和全文索引不受影响。继续吗？'))mutate('rebuild');};
+ const tile=(label,count,kind)=>h('div',{className:'dcc-stat'+(kind?' is-'+kind:'')},h('span',{className:'dcc-stat-label'},label),h('b',{className:'dcc-stat-num'},count));
+ const cell=v=>v==null?h('span',{className:'dcc-dim'},'—'):v;
+ const mix=m=>{const a=num(m?.indexed),p=num(m?.pending),f=num(m?.failed),t=a+p+f;
+  return h('div',{className:'dcc-mix'+(t?'':' is-empty'),'aria-hidden':'true'},...(t?[['is-done',a],['is-wait',p],['is-fail',f]].filter(([,v])=>v).map(([c,v])=>h('span',{key:c,className:c,style:{width:(v/t*100)+'%'}})):[]));};
+ const meta=Object.fromEntries(SEMANTIC_FIELDS.map(([k,label,type])=>[k,{label,type}]));
+ const semField=k=>{
+  const {label,type}=meta[k],id='dcc-s-'+k,changed=!!saved.current&&differs(draft[k],saved.current[k]);
+  const unit=/TimeoutMs$/.test(k)?'毫秒':k==='mediaMaxSeconds'?'秒':k==='mediaMaxBytes'?'字节':null;
+  const text=label.replace(/ \/ (毫秒|秒)$/,''),mono=/model|Model|keyEnv|Path$/.test(k)||type==='array';
+  const control=type==='array'
+   ?h('div',{className:'dcc-input is-area'+(mono?' is-mono':'')},h('textarea',{id,rows:3,value:draft[k],spellCheck:false,onChange:e=>set(k,e.target.value)}))
+   :type==='dimensions'
+    ?h('div',{className:'dcc-input is-select'},h('select',{id,value:draft[k],onChange:e=>set(k,e.target.value)},...[768,1536,3072].map(n=>h('option',{key:n,value:n},n))))
+    :h('div',{className:'dcc-input'+(mono?' is-mono':'')},h('input',{id,type:type==='number'?'number':'text',value:draft[k],spellCheck:false,autoComplete:'off',onChange:e=>set(k,e.target.value)}),unit?h('span',{className:'dcc-unit'},unit):null);
+  return h('div',{key:k,className:'dcc-field'+(changed?' is-changed':'')+(type==='array'?' is-wide':'')},h('label',{htmlFor:id},text),control);
+ };
+ const grouped=new Set(SEMANTIC_GROUPS.flatMap(g=>g.keys));
+ const groups=[...SEMANTIC_GROUPS,{title:'其他',keys:SEMANTIC_FIELDS.map(([k])=>k).filter(k=>!grouped.has(k))}];
+ const issue=problem?semanticIssue(problem):null;
  return h('div',{className:'dcc-semantic'},
-  h('section',{className:'dcc-group'},h('div',{className:'dcc-head'},h('div',null,h('h3',null,'精确搜索与多模态回忆'),h('p',{className:'dcc-lede'},'原文继续留在本机；Gemini Embedding 2 为授权资料生成语义向量，再与 SQLite FTS5 融合。')),h('span',{className:'dcc-pill dcc-tone-'+(error||value?.health?'warn':'ok')},flag)),
-   h('p',null,value?.notice||'正在读取语义索引设置…'),
-   h('div',{className:'dcc-actions'},h('button',{className:'dcc-btn',type:'button',disabled:busy,onClick:refresh},'刷新状态'),...['pause','resume','retry','rebuild'].map((action,i)=>h('button',{className:'dcc-btn',type:'button',key:action,disabled:busy||!status,onClick:()=>mutate(action)},['暂停队列','恢复处理','重试失败项','重建派生索引'][i]))),
-   error||value?.health?h('p',{className:'dcc-flash dcc-tone-warn',role:'alert'},error||value.health):null,
-   notice?h('p',{className:'dcc-flash dcc-tone-ok',role:'status'},notice):null),
-  h('section',{className:'dcc-group'},h('h3',null,'本机索引进度'),
-   h('dl',{className:'dcc-dl'},h('dt',null,'当前阶段'),h('dd',null,phase),h('dt',null,'索引 / 待处理 / 失败'),h('dd',null,`${status?.indexed??0} / ${status?.pending??0} / ${status?.failed??0}`),
-    h('dt',null,'今日请求 / token'),h('dd',null,`${status?.requestsToday??0} / ${status?.tokensToday??0}`),h('dt',null,'密钥'),h('dd',null,value?.keyConfigured?'环境变量已配置':'环境变量尚未就绪'),
-    h('dt',null,'最后成功'),h('dd',null,status?.lastSuccessAt?clock(status.lastSuccessAt):'尚无成功记录'),h('dt',null,'状态更新时间'),h('dd',null,status?.updatedAt?clock(status.updatedAt):'尚未生成'),
+  h('section',{className:'dcc-sem-hero','aria-labelledby':'dcc-sem-title'},
+   h('div',{className:'dcc-head'},
+    h('div',null,h('h3',{className:'dcc-sem-title',id:'dcc-sem-title'},'精确搜索与多模态回忆'),h('p',{className:'dcc-lede'},'原文继续留在本机；Gemini Embedding 2 为授权资料生成语义向量，再与 SQLite FTS5 融合。')),
+    h('span',{className:'dcc-pill dcc-tone-'+tone,role:'status'},h('span',{className:'dcc-dot'}),h('span',null,flag))),
+   h('p',{className:'dcc-sem-notice'},value?.notice||'正在读取语义索引设置…'),
+   issue?h('div',{className:'dcc-issue',role:'alert'},h('span',{className:'dcc-issue-icon','aria-hidden':'true'},'!'),
+    h('div',{className:'dcc-issue-body'},h('strong',null,issue[0]),h('p',null,issue[1]),issue[2]?h('code',null,problem):null)):null,
+   notice?h('p',{className:'dcc-flash dcc-tone-ok',role:'status'},notice):null,
+   h('div',{className:'dcc-toolbar',role:'toolbar','aria-label':'语义索引操作'},
+    h('button',{className:'dcc-btn dcc-btn-sm',type:'button',disabled:busy,onClick:refresh},'刷新状态'),
+    h('span',{className:'dcc-sep','aria-hidden':'true'}),
+    h('button',{className:'dcc-btn dcc-btn-sm',type:'button',disabled:busy||!status,onClick:()=>mutate('pause')},'暂停队列'),
+    h('button',{className:'dcc-btn dcc-btn-sm'+(lead==='resume'?' dcc-btn-primary':''),type:'button',disabled:busy||!status,onClick:()=>mutate('resume')},'恢复处理'),
+    h('button',{className:'dcc-btn dcc-btn-sm'+(lead==='retry'?' dcc-btn-primary':''),type:'button',disabled:busy||!status,onClick:()=>mutate('retry')},'重试失败项',failed?h('span',{className:'dcc-btn-count'},failed):null),
+    h('button',{className:'dcc-btn dcc-btn-sm dcc-btn-quiet',type:'button',disabled:busy||!status,title:'重新生成全部语义向量，会消耗请求额度',onClick:rebuild},'重建派生索引'))),
+  h('section',{className:'dcc-group','aria-labelledby':'dcc-sem-progress'},
+   h('div',{className:'dcc-sec-head'},h('h3',{id:'dcc-sem-progress'},'本机索引进度'),h('span',{className:'dcc-sec-meta'},'当前阶段 · ',phase)),
+   h('div',{className:'dcc-stats'},tile('已索引',indexed,'ok'),tile('待处理',pending,pending?'wait':''),tile('失败',failed,failed?'bad':'')),
+   h('div',{className:'dcc-table-wrap'},h('table',{className:'dcc-table dcc-modal'},
+    h('thead',null,h('tr',null,h('th',null,'内容'),h('th',{className:'is-num'},'已索引'),h('th',{className:'is-num'},'待处理'),h('th',{className:'is-num'},'失败'),h('th',{className:'dcc-mix-cell'},h('span',{className:'dcc-legend'},h('i',{className:'is-done'}),'完成',h('i',{className:'is-wait'}),'待处理',h('i',{className:'is-fail'}),'失败')))),
+    h('tbody',null,...SEMANTIC_MODALITIES.map(([key,label])=>h('tr',{key},h('td',null,label),h('td',{className:'is-num'},cell(per[key]?.indexed)),h('td',{className:'is-num'},cell(per[key]?.pending)),h('td',{className:'is-num'+(num(per[key]?.failed)?' is-bad':'')},cell(per[key]?.failed)),h('td',{className:'dcc-mix-cell'},mix(per[key]))))))),
+   h('dl',{className:'dcc-kv dcc-kv-sem'},
+    h('dt',null,'今日请求 / token'),h('dd',null,`${status?.requestsToday??0} / ${status?.tokensToday??0}`),
+    h('dt',null,'密钥'),h('dd',null,h('span',{className:'dcc-inline '+(value?.keyConfigured?'dcc-text-ok':'dcc-text-warn')},h('span',{className:'dcc-dot'}),value?.keyConfigured?'环境变量已配置':'环境变量尚未就绪')),
+    h('dt',null,'最后成功'),h('dd',null,status?.lastSuccessAt?clock(status.lastSuccessAt):'尚无成功记录'),
+    h('dt',null,'状态更新时间'),h('dd',null,status?.updatedAt?clock(status.updatedAt):'尚未生成',stale?h('span',{className:'dcc-badge dcc-tone-warn'},'已过期'):null),
     h('dt',null,'来源变更拒绝数'),h('dd',null,status?.rejectedStale??0)),
-   h('div',{style:{overflowX:'auto'}},h('table',{className:'dcc-table'},h('thead',null,h('tr',null,...['内容','已索引','待处理','失败'].map(x=>h('th',{key:x},x)))),h('tbody',null,...[['text','文本经历'],['image','图片原件'],['audio','音频片段'],['video','视频画面'],['pdf','PDF 页面']].map(([key,label])=>h('tr',{key},h('td',null,label),h('td',null,per[key]?.indexed??'—'),h('td',null,per[key]?.pending??'—'),h('td',null,per[key]?.failed??'—')))))),
    h('p',{className:'dcc-hint'},'视频画面与音轨分别处理，回读保留时间位置；PDF 保留页码。缺少原件、缺少媒体工具或处理失败不会显示为已索引。未索引完时，搜索会明确标示覆盖不完整。'),
-   status?.lastQuery?h('details',{className:'dcc-more',open:true},h('summary',null,'最近一次检索如何完成'),h('pre',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},JSON.stringify(status.lastQuery,null,2))):null),
-  draft?h('section',{className:'dcc-group'},h('h3',null,'语义检索设置'),h('p',{className:'dcc-hint'},'与协作压缩的总开关独立。模型或维度改变后使用独立的新一代向量，不混用旧向量。会话列表为空时，只在 search_context 明确选定目标后索引该会话。'),
-   ...SEMANTIC_BOOL.filter(([key])=>key in draft).map(([key,label])=>h('label',{key,className:'dcc-master',style:{marginBottom:12}},h(Switch,{checked:draft[key],label,onChange:v=>set(key,v)}),label)),
-   h('div',{className:'dcc-fields'},...SEMANTIC_FIELDS.filter(([key])=>key in draft).map(([key,label,type])=>h('label',{className:'dcc-field',key,style:{display:'flex',flexDirection:'column',gap:5,marginBottom:14}},h('span',null,label),type==='array'?h('textarea',{rows:3,value:draft[key],onChange:e=>set(key,e.target.value),style:{font:'inherit'}}):type==='dimensions'?h('select',{value:draft[key],onChange:e=>set(key,e.target.value)},...[768,1536,3072].map(n=>h('option',{key:n,value:n},n))):h('input',{type:type==='number'?'number':'text',value:draft[key],onChange:e=>set(key,e.target.value),style:{font:'inherit',minWidth:0}})))),
+   status?.lastQuery?h('details',{className:'dcc-raw'},h('summary',null,'最近一次检索如何完成'),h('pre',null,JSON.stringify(status.lastQuery,null,2))):null),
+  draft?h('section',{className:'dcc-group','aria-labelledby':'dcc-sem-settings'},h('h3',{id:'dcc-sem-settings'},'语义检索设置'),
+   h('p',{className:'dcc-sub'},'与协作压缩的总开关独立。模型或维度改变后使用独立的新一代向量，不混用旧向量。会话列表为空时，只在 search_context 明确选定目标后索引该会话。'),
+   h('div',{className:'dcc-toggles'},...SEMANTIC_BOOL.filter(([key])=>key in draft).map(([key,label,note])=>h('div',{key,className:'dcc-toggle-row'+(saved.current&&differs(draft[key],saved.current[key])?' is-changed':'')},h(Switch,{checked:!!draft[key],label,onChange:v=>set(key,v)}),h('div',null,h('strong',null,label),note?h('span',null,note):null)))),
+   ...groups.map(g=>{const keys=g.keys.filter(k=>k in draft&&meta[k]);if(!keys.length)return null;
+    return h('div',{key:g.title,className:'dcc-sem-block'},h('h4',null,g.title),g.sub?h('p',{className:'dcc-sub'},g.sub):null,h('div',{className:'dcc-grid'},...keys.map(semField)));}),
    h('p',{className:'dcc-hint'},'媒体目录只用于已与消息关联的文件，不会遍历整个目录。请求预算、并发和超时是程序的资源保护；资料选择、证据核对与第二跳仍可由模型决定。'),
-   h('div',{className:'dcc-actions'},h('button',{type:'button',className:'dcc-btn dcc-btn-primary',disabled:busy||!changes.length,onClick:()=>mutate('save')},busy?'正在处理…':`保存语义设置${changes.length?'（'+changes.length+' 项）':''}`))):null);
+   changes.length||busy?h('div',{className:'dcc-bar',role:'region','aria-label':'未保存的语义设置'},
+    h('span',{className:'dcc-bar-text'},h('strong',null,changes.length?`${changes.length} 项语义设置未保存`:'正在处理'),changes.length?'，保存后后续任务读取新设置。':'…'),
+    h('button',{type:'button',className:'dcc-btn dcc-btn-ghost',disabled:busy||!changes.length,onClick:discard},'放弃修改'),
+    h('button',{type:'button',className:'dcc-btn dcc-btn-primary',disabled:busy||!changes.length,onClick:()=>mutate('save')},busy?'正在处理…':'保存语义设置')):null):null);
 }
 function Panel(){
  const [state,setState]=R.useState(null),[draft,setDraft]=R.useState(null),[loadError,setLoadError]=R.useState('');

@@ -16,3 +16,10 @@ runs/
 /feedback-cases.json
 /fixture-replay.json
 /compression-policy.json
+
+# Local run artifacts and backups; may contain real conversation data (2026-11-09)
+*.bak
+*.tmp
+*-tests.txt
+*-test.txt
+*result*.txt

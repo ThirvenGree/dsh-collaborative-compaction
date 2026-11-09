@@ -21,6 +21,9 @@ const scopeProblem={
 };
 const builtInGroups=fixtureCases.slice(0,3).map((probe,i)=>({probe,positive:legacyHoldouts[i],counter:legacyCounters[i]})).concat(scopeProblem);
 export const bankControl=fixtureCases.at(-1);
+// 2026-11-07: the built-in groups are the fallback base. Normally each replay job uses a freshly generated base
+// (fresh-bank.js) with the same shape; every check below runs against whichever base the job uses.
+export const builtinBase=Object.freeze({source:'builtin',groups:builtInGroups,control:bankControl});
 
 const idOK=id=>typeof id==='string'&&/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(id)&&!['constructor','prototype','toString','valueOf'].includes(id)&&!id.startsWith('noise-');
 const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
@@ -48,11 +51,11 @@ function checkCase(c,isProbe,seen){
   !keysOnly(c.requiredQuotes,c.requiredIds)||!c.requiredIds.every(id=>local.has(id)&&safe(c.requiredQuotes[id],180)&&local.get(id).includes(c.requiredQuotes[id])))
   throw Error('校准包每个必需引用都要能回到本题原文');
 }
-export function validateChallengeGroups(groups,{maxGroups=2}={}){
+export function validateChallengeGroups(groups,{maxGroups=2,base=builtinBase}={}){
  if(!Number.isSafeInteger(maxGroups)||maxGroups<0||maxGroups>20)throw Error('校准组数量限制无效');
  if(!Array.isArray(groups)||groups.length>maxGroups)throw Error('额外校准包超出本轮组数上限');
  const seen={ids:new Set(),questions:new Set(),texts:new Set()};
- for(const c of [...builtInGroups.flatMap(g=>[g.probe,g.positive,g.counter]),bankControl]){
+ for(const c of [...base.groups.flatMap(g=>[g.probe,g.positive,g.counter]),base.control]){
   seen.ids.add(c.id);seen.questions.add(norm(c.question));for(const r of c.records){seen.ids.add(r.id);seen.texts.add(norm(r.text));}
  }
  for(const g of groups){
@@ -62,8 +65,8 @@ export function validateChallengeGroups(groups,{maxGroups=2}={}){
  }
  if(groups.length){
   // Exact duplicates were checked above. Also reject an excerpt smuggled into a longer discovery record or summary.
-  const all=[...builtInGroups,...groups];
-  const discovery=[...all.map(g=>g.probe),bankControl].flatMap(c=>[c.question,c.summary,...c.records.map(r=>r.text)]).map(norm);
+  const all=[...base.groups,...groups];
+  const discovery=[...all.map(g=>g.probe),base.control].flatMap(c=>[c.question,c.summary,...c.records.map(r=>r.text)]).map(norm);
   for(const g of all)for(const test of [g.positive,g.counter]){
    const hiddenQuestion=norm(test.question);
    if(discovery.some(v=>v.includes(hiddenQuestion)))throw Error('发现集已包含未见题目。');
@@ -92,10 +95,45 @@ export function citedSpans(text,records){
  }
  return spans;
 }
-export function collectCases(extraGroups=[]){
+export function collectCases(extraGroups=[],base=builtinBase){
  // Two operator-supplied groups and two admitted dynamic groups can be evaluated together.
  // Persisted dynamic banks may be larger, but are rotated through bounded replay batches.
- const groups=[...builtInGroups,...validateChallengeGroups(extraGroups,{maxGroups:4})];
- const diagnostics=[...groups.map(g=>({...g.probe,summaryCitations:citedSpans(g.probe.summary,g.probe.records)})),bankControl];
- return {groups,diagnostics,all:[...diagnostics,...groups.flatMap(g=>[g.positive,g.counter])]};
+ const groups=[...base.groups,...validateChallengeGroups(extraGroups,{maxGroups:4,base})];
+ const diagnostics=[...groups.map(g=>({...g.probe,summaryCitations:citedSpans(g.probe.summary,g.probe.records)})),base.control];
+ return {groups,diagnostics,all:[...diagnostics,...groups.flatMap(g=>[g.positive,g.counter])],control:base.control,source:base.source||'builtin'};
+}
+
+// ---------- 2026-11-07: validate a freshly generated base ----------
+// The control keeps the fixed id 'adequate-summary-control' (host and feedback gates look it up by id); its
+// content is new each time. All other ids are rewritten under the 'fresh-' prefix so they can never collide
+// with operator-supplied or learned groups, and summary labels [id] are rewritten with them.
+export const FRESH_MECHANISMS=['identifier','correction','receipt','scope'];
+function renameCase(c,newId,prefix){
+ const map=new Map(c.records.map((r,i)=>[r.id,prefix+'-r'+(i+1)]));
+ const records=c.records.map(r=>({id:map.get(r.id),role:r.role,text:r.text,...(r.corrects!==undefined?{corrects:map.get(r.corrects)??r.corrects}:{})}));
+ const out={id:newId,question:c.question,expected:c.expected,requiredIds:c.requiredIds.map(id=>map.get(id)??id),
+  requiredQuotes:Object.fromEntries(Object.entries(c.requiredQuotes||{}).map(([id,q])=>[map.get(id)??id,q])),records};
+ if(c.summary!==undefined)out.summary=String(c.summary).replace(/\[([\w-]+)\]/g,(m,id)=>map.has(id)?'['+map.get(id)+']':m);
+ return out;
+}
+export function validateFreshBase(raw){
+ if(!plain(raw)||!Array.isArray(raw.groups)||raw.groups.length!==FRESH_MECHANISMS.length||!plain(raw.control))throw Error('新题需要 4 组题组和 1 道对照题');
+ const groups=raw.groups.map((g,i)=>{
+  if(!keysOnly(g,['probe','positive','counter']))throw Error('题组需提供诊断、正向留出和边界反例');
+  const name='fresh-'+FRESH_MECHANISMS[i];
+  return {probe:renameCase(g.probe,name,name+'-p'),positive:renameCase(g.positive,name+'-unseen',name+'-u'),counter:renameCase(g.counter,name+'-boundary',name+'-b')};
+ });
+ const c=raw.control;
+ if(!keysOnly(c,['id','question','expected','requiredIds','requiredQuotes','records','summary'])||!safe(c.summary,600))throw Error('对照题格式无效');
+ const control=renameCase(c,'adequate-summary-control','fresh-control');
+ // The control is a case with an ADEQUATE summary: every required quote must be cited under its record label.
+ checkCase(control,true,{ids:new Set(),questions:new Set(),texts:new Set()});
+ const spans=citedSpans(control.summary,control.records);
+ if(!control.requiredIds.every(id=>spans.some(s=>s.id===id&&s.quote.includes(control.requiredQuotes[id]))))throw Error('对照题的摘要必须逐字引用并标注必需证据');
+ control.summaryCitations=spans;
+ const base={source:'generated',groups:[],control};
+ validateChallengeGroups(groups,{maxGroups:FRESH_MECHANISMS.length,base});
+ // A fresh base also must not reuse built-in passages (they stay the published fallback).
+ validateChallengeGroups(groups,{maxGroups:FRESH_MECHANISMS.length});
+ return {source:'generated',groups,control};
 }

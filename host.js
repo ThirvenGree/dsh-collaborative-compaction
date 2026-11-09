@@ -1,5 +1,6 @@
 import {proposeClause} from './proposal.js';
-import {collectCases,validateChallengeGroups} from './challenge-bank.js';
+import {collectCases,validateChallengeGroups,builtinBase} from './challenge-bank.js';
+import {generateFreshBase,freshView} from './fresh-bank.js';
 import {harvestCase} from './harvest.js';
 import {HarvestRunner,emptyHarvest,validateHarvestState,harvestEnabled,harvestModelKey} from './harvest-runner.js';
 import {loadDynamicBank,addDynamicCase,selectDynamicCases,markDynamicCasesTested,clearDynamicBank,dynamicBankFile} from './dynamic-bank.js';
@@ -133,6 +134,14 @@ async function endpointInactive(base){
   socket.setTimeout(1000,()=>finish(false));
  });
 }
+// The configuration is kept across restarts, so its endpoint usually belongs to the previous run.
+// That run is gone when host.json records the same port and its process no longer exists, even if
+// another program now happens to listen on that port.
+export function priorHostGone(base,hostFile=path.join(dataRoot,'host.json'),isAlive=pid=>{try{process.kill(pid,0);return true;}catch(e){return e.code==='EPERM';}}){
+ let port;try{port=Number(new URL(base).port);}catch{return false;}
+ let host;try{host=read(hostFile);}catch{return false;}
+ return Number.isSafeInteger(host?.pid)&&host.port===port&&host.pid!==process.pid&&!isAlive(host.pid);
+}
 function findPriorSnapshot(backup,oldToken){
  if(fs.existsSync(backup))return read(backup);
  const marker=path.join(defaultRoot,'installed-engine.json');
@@ -162,7 +171,7 @@ async function engineChanges(c,port,token,validate,shutdown=false) {
  const sameEndpoint=priorEndpoint===`http://127.0.0.1:${port}/v1`;
  if(shutdown&&owned&&(!sameEndpoint||keys[providerName]!==token))return changes;
  const currentListener=sameEndpoint && listeners.get(port)===token;
- if(owned&&!currentListener&&(!sameEndpoint||keys[providerName]!==token)&&!(await endpointInactive(priorEndpoint)))
+ if(owned&&!currentListener&&(!sameEndpoint||keys[providerName]!==token)&&!(await endpointInactive(priorEndpoint))&&!priorHostGone(priorEndpoint))
   throw Error('Engine configuration belongs to a live or unverifiable plugin instance');
  let saved;
  if(c.enabled&&!owned){
@@ -191,6 +200,40 @@ async function engineChanges(c,port,token,validate,shutdown=false) {
 }
 let configQueue=Promise.resolve();
 function serialized(fn){const result=configQueue.then(fn);configQueue=result.catch(()=>{});return result;}
+// The billion-context proxy reads its compress settings once when it starts. When it is already
+// running before this plugin writes the engine file, ask it to re-read the file through its
+// loopback-only management endpoint. No credentials are sent; failures are reported, not thrown.
+export function engineStateDir(){return path.join(process.env.XDG_STATE_HOME?path.resolve(process.env.XDG_STATE_HOME):path.join(os.homedir(),'.local','state'),'billion-context');}
+export async function reloadEngineProxy({stateDirectory=engineStateDir(),fetchImpl=fetch,timeoutMs=5000,isAlive=pid=>{try{process.kill(pid,0);return true;}catch(e){return e.code==='EPERM';}}}={}){
+ let info;
+ try{info=JSON.parse(fs.readFileSync(path.join(stateDirectory,'proxy-origin'),'utf8'));}catch{return {reloaded:false,reason:'no running proxy found'};}
+ let url;
+ try{url=new URL('/__bili/config/reload',info.origin);}catch{return {reloaded:false,reason:'invalid proxy origin'};}
+ if(url.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(url.hostname))return {reloaded:false,reason:'proxy origin is not loopback'};
+ if(Number.isSafeInteger(info.pid)&&!isAlive(info.pid))return {reloaded:false,reason:'recorded proxy is not running'};
+ try{
+  const res=await fetchImpl(url,{method:'POST',signal:AbortSignal.timeout(timeoutMs)});
+  return res.ok?{reloaded:true,origin:url.origin}:{reloaded:false,reason:'HTTP '+res.status};
+ }catch(e){return {reloaded:false,reason:String(e?.message||e).slice(0,160)};}
+}
+// 2026-11-07：启动时的竞态——引擎代理先读到上次的端口，本插件写好新端口去通知重载时，proxy-origin 还没更新（指向上次已退出的进程），
+// 于是跳过重载，这一整次运行的压缩都连到旧端口（“local compaction service is not reachable”）。
+// 现在第一次没找到在跑的代理（或连不上）时，不阻塞启动，在后台每 3 秒再试，最多 30 秒。
+export const RELOAD_RETRY_REASONS=/no running proxy found|recorded proxy is not running|fetch failed|ECONNREFUSED|ECONNRESET|socket|timed? ?out|aborted/i;
+export function retryReloadInBackground({reload=reloadEngineProxy,tries=10,delayMs=3000,log=()=>{}}={}){
+ let left=tries,timer=null,stopped=false;
+ const step=async()=>{if(stopped)return;left--;let r;try{r=await reload();}catch(e){r={reloaded:false,reason:String(e?.message||e)};}
+  if(r?.reloaded){log('引擎代理已重载配置（重试）');return;}
+  if(left>0&&RELOAD_RETRY_REASONS.test(String(r?.reason||''))){timer=setTimeout(step,delayMs);timer.unref?.();}else log('引擎代理重载未完成：'+String(r?.reason||''));};
+ timer=setTimeout(step,delayMs);timer.unref?.();
+ return ()=>{stopped=true;clearTimeout(timer);};
+}
+const reloadAfterWrite=async()=>{
+ if(process.env.NODE_TEST_CONTEXT!==undefined)return {reloaded:false,reason:'skipped under test'};
+ const first=await reloadEngineProxy();
+ if(!first.reloaded&&RELOAD_RETRY_REASONS.test(String(first.reason||'')))retryReloadInBackground({log:m=>{try{console.info('[dsh-collaborative-compaction] '+m);}catch{}}});
+ return first;
+};
 export function syncEngine(c,port,token,validate=validateEngine,shutdown=false){
  return serialized(()=>guarded(async()=>[await engineChanges(validateConfig(typeof c==="function"?c():c),port,token,validate,shutdown)]));
 }
@@ -241,7 +284,7 @@ export function apply(ctx){
  migrateProfile();
  fs.mkdirSync(dataRoot,{recursive:true});let token;const tokenFile=path.join(dataRoot,'local-token');if(fs.existsSync(tokenFile))token=fs.readFileSync(tokenFile,'utf8');else{token=randomBytes(32).toString('hex');fs.writeFileSync(tokenFile,token,{mode:0o600});}
  recoverRuns();
- const csrf=randomBytes(32).toString('hex');let port=0,health='starting';const pending=new Set();
+ const csrf=randomBytes(32).toString('hex');let port=0,health='starting',engineReload=null;const pending=new Set();
  let replayJob=null,replayError='',replayProgress=null,disposed=false;
  const replayFile=path.join(dataRoot,'fixture-replay.json');
  const policyFile=path.join(dataRoot,'compression-policy.json');
@@ -348,9 +391,14 @@ export function apply(ctx){
   if(!c.enabled||disposed)throw Error('协作压缩未运行');
   if(!c.replayFeedbackEnabled&&requestedOrigin!=='manual')return;
   const bank=loadChallengeBank(dataRoot),learned=selectDynamicCases(dataRoot,{manualGroups:bank.groups});
-  const groups=[...bank.groups,...learned.groups],{diagnostics}=collectCases(groups);
+  const groups=[...bank.groups,...learned.groups];
+  // 2026-11-07: the questions are generated fresh inside the job (below); this built-in pass only validates the
+  // operator and learned groups and sizes the job before the lease is taken.
+  let base=builtinBase,{diagnostics}=collectCases(groups);
   // Keep learned production omissions near the front, without discarding the controls.
-  const prioritized=[...diagnostics].sort((a,b)=>Number(learned.groups.some(g=>g.probe.id===b.id))-Number(learned.groups.some(g=>g.probe.id===a.id)));
+  const prioritize=list=>[...list].sort((a,b)=>Number(learned.groups.some(g=>g.probe.id===b.id))-Number(learned.groups.some(g=>g.probe.id===a.id)));
+  let prioritized=prioritize(diagnostics);
+  const previousThemes=(()=>{try{return fs.existsSync(replayFile)?(read(replayFile).suiteThemes||[]):[];}catch{return [];}})();
   let job,claim;
   claim=await changePolicy(old=>{
    if(disposed)throw Error('插件正在退出');
@@ -393,13 +441,21 @@ export function apply(ctx){
      return summarize(work,c,options.signal,policy,undefined,{calibration:budget,
       checkpoint:(key,input,fn)=>checkpoint.run(meta.phase+'/'+meta.key+'/'+key,input,fn)});
     };
+    // Fresh questions for this job, kept in the checkpoint so a resumed slice uses the same set.
+    base=c.replayFreshQuestions===false?{...builtinBase,reason:'设置里关闭了“每次回放新出题”。'}:await checkpoint.run('suite/fresh',{job:job.id,version:1},()=>generateFreshBase({
+     generate:(system,input,route)=>options.generate(system,input,route),
+     review:(system,input)=>{telemetry.proposalReviews++;return reviewProposedClause(system,input,c,options.signal);},
+     route:{provider:options.provider,model:options.model,signal:options.signal},avoid:previousThemes,signal:options.signal}));
+    try{({diagnostics}=collectCases(groups,base));}
+    catch(error){base={...builtinBase,reason:'新题与已有题组冲突，改用内置题：'+String(error.message).slice(0,120)};({diagnostics}=collectCases(groups,base));}
+    prioritized=prioritize(diagnostics);job.caseCount=diagnostics.length;job.questions=freshView(base);
     if(job.kind==='bootstrap'){
      baseline=await runBaseline({active:effectivePolicy(claim,scope),options:{...options,phase:'bootstrap'},compress,cases:prioritized});
      diagnostic=baseline.report;
      feedback={status:baseline.status==='baseline-complete'?'baseline-complete':'held',reason:baseline.reason,before:baseline.before,failures:baseline.failures};
     }else{
      diagnostic=await runReplaySuite({...options,phase:'diagnostic',cases:diagnostics});
-     if(c.replayFeedbackEnabled)feedback=await evaluateFeedback({diagnostic,active:effectivePolicy(claim,scope),nextVersion:claim.revision+1,options,challengeGroups:groups,
+     if(c.replayFeedbackEnabled)feedback=await evaluateFeedback({diagnostic,active:effectivePolicy(claim,scope),nextVersion:claim.revision+1,options,challengeGroups:groups,base,
       propose:({failures,active})=>proposeClause({failures,active,
        generate:(system,input,route)=>checkpoint.run('proposal/draft',{system,input,provider:route.provider,model:route.model},()=>options.generate(system,input,route)),
        review:(system,input)=>checkpoint.run('proposal/audit',{system,input,model:c.reviewModel},()=>{telemetry.proposalReviews++;return reviewProposedClause(system,input,c,options.signal);}),
@@ -438,7 +494,7 @@ export function apply(ctx){
     pauseKind:feedback.pauseKind,updatedAt:now,nextAt:feedback.status==='paused'?(pause.nextAt??null):feedback.status==='unavailable'||inconclusive?now+86400000:null,
     checkpoint:inconclusive||pause?.pauseKind==='content-rejected'?{schema:1,tasks:{},completed:0}:checkpoint?.snapshot()||job.checkpoint,telemetry:{...telemetry,elapsedMs:(job.telemetry.elapsedMs||0)+now-sliceStartedAt}};
    write(calibrationFile,job);
-   const last={...proof,origin,at:now,kind:job.kind,jobId:job.id,telemetry:job.telemetry,challengeSets:groups.length,learnedIds:learned.ids,
+   const last={...proof,origin,at:now,kind:job.kind,jobId:job.id,telemetry:job.telemetry,challengeSets:groups.length,questions:freshView(base),learnedIds:learned.ids,
     learnedDigest:learned.digest,bankDigest:bank.digest,proposer:c.aProvider+'/'+c.aModel,clauseReviewer:c.reviewModel,from:effectivePolicy(old,scope).version};
    let scheduled=completed?settleSchedule(old,{origin,completed:true,now}):feedback.status==='paused'?{...old,nextRetryAt:pause.nextAt??Number.MAX_SAFE_INTEGER,retryOrigin:origin}:settleSchedule(old,{origin,completed:false,now});
    if(invalidated)scheduled={...old,nextRetryAt:0,retryOrigin:null};
@@ -462,7 +518,8 @@ export function apply(ctx){
    if(!disposed&&selectDynamicCases(dataRoot,{manualGroups:bank.groups}).digest===learned.digest)markDynamicCasesTested(dataRoot,learned.ids);
   }));
   if(disposed)throw Error('回放随插件退出而取消');
-  const report={...(diagnostic||{probes:[]}),at:Date.now(),suite:'open-replay-v4',telemetry:job.telemetry,feedback,calibration:calibrationView(job)};
+  const report={...(diagnostic||{probes:[]}),at:Date.now(),suite:'open-replay-v4',telemetry:job.telemetry,feedback,calibration:calibrationView(job),
+   questions:freshView(base),suiteThemes:[...previousThemes,base.theme].filter(Boolean).slice(-8)};
   write(replayFile,report);return report;
  }
  function startFixture(origin='manual'){
@@ -522,10 +579,15 @@ export function apply(ctx){
   }catch(e){reply(res,422,{error:String(e.message).slice(0,250)});}finally{pending.delete(abort);}
  });
  server.on('error',e=>{health='listener failed: '+e.code;});
- server.listen(0,'127.0.0.1',async()=>{port=server.address().port;listeners.set(port,token);try{await migratePolicyScope();await syncEngine(config,port,token);ready();}catch(e){health='engine config failed: '+e.message;}});
+ server.listen(0,'127.0.0.1',async()=>{port=server.address().port;listeners.set(port,token);try{await migratePolicyScope();await syncEngine(config,port,token);ready();engineReload={...await reloadAfterWrite(),at:Date.now()};}catch(e){health='engine config failed: '+e.message;}});
  const learningTimer=setInterval(()=>{void harvester.pump();void maybeLearnedReplay();},60000);learningTimer.unref?.();
  ctx.effect(()=>async()=>{disposed=true;clearInterval(learningTimer);harvester.dispose();for(const c of pending)c.abort(Error("Host stopping"));
-  try{await changePolicy(s=>s.lease?.hostId===hostId?{...s,lease:null}:null);}catch{}listeners.delete(port);server.close();try{await syncEngine(()=>({...config(),enabled:false}),port,token,validateEngine,true);}catch{}});
+  try{await changePolicy(s=>s.lease?.hostId===hostId?{...s,lease:null}:null);}catch{}listeners.delete(port);server.close();
+   // Keep the engine configuration across a normal shutdown: billion-context and its DSH side
+   // read it once at their own start, which comes before this plugin's. Restoring here would make
+   // every next run start without collaborative compression. Turning the plugin off in its settings
+   // still restores the original configuration; the next start takes this one over again.
+  });
  ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/semantic',handler:async(req,res)=>{
   if(!localSettingsRequest(req)){reply(res,403,{error:'Forbidden'});return;}
   try{
@@ -548,6 +610,7 @@ export function apply(ctx){
     }else{
      const before=config();
      const after=await saveSettings(input.changes??input,port,token,validateEngine,input.expected);
+     engineReload={...await reloadAfterWrite(),at:Date.now()};
      if(!harvestEnabled(after)||harvestModelKey(before)!==harvestModelKey(after))await harvester.cancel();
      const budgetChanged=['replaySliceCalls','replayDailyCalls','replayDailyTokens','replaySliceMs','replayResumeMinutes'].some(k=>before[k]!==after[k]);
      if(budgetChanged&&!replayJob)await changePolicy(old=>{
@@ -558,7 +621,7 @@ export function apply(ctx){
      });
      ready();
     }}else if(req.method!=='GET'){reply(res,405,{});return;}
-   reply(res,200,{config:config(),csrf,health,replay:replayState(),retrieval:retrievalPolicy(),runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
+   reply(res,200,{config:config(),csrf,health,engineReload,replay:replayState(),retrieval:retrievalPolicy(),runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
   }catch(e){reply(res,400,{error:e.message});}
  }}));
 }

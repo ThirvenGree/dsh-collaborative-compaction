@@ -26,7 +26,9 @@ test('automatic bootstrap stops at twelve calls and resumes checkpoints across r
  const configFile=path.join(dir,'config.json'),policyFile=path.join(dir,'compression-policy.json'),jobFile=path.join(dir,'calibration-checkpoint.json');
  const reportFile=path.join(dir,'fixture-replay.json'),usageFile=path.join(dir,'calibration-usage.json'),hostFile=path.join(dir,'host.json');
  const c={...defaults,enabled:true,replayHarvestEnabled:false,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:false,
-  aProvider:'fixture',aModel:'fixture-reader',replayDailyCalls:14};
+  aProvider:'fixture',aModel:'fixture-reader',replayDailyCalls:14,
+  // Exact call budgets below assume the built-in questions; fresh generation has its own tests.
+  replayFreshQuestions:false};
  fs.writeFileSync(configFile,JSON.stringify(c));fs.writeFileSync(path.join(dir,'installed-engine.json'),JSON.stringify({enginePath:engine}));
  let readers=0,summaries=0,formal=0,holdReader;
  const readerCalls=new Map(),summaryCalls=new Map();
