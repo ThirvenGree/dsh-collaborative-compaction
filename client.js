@@ -289,11 +289,12 @@ const CSS=`
 @media (prefers-reduced-motion:reduce){.dcc *{transition:none!important}}
 `;
 
-const NUM={timeoutMs:[1000,580000,'ms'],replayTimeoutMs:[600000,3600000,'ms'],replaySliceCalls:[1,100,'次'],replayDailyCalls:[1,10000,'次'],replayDailyTokens:[1000,100000000,'token'],replaySliceMs:[1000,600000,'ms'],replayResumeMinutes:[1,1440,'分钟'],plannerTimeoutMs:[1000,120000,'ms'],retries:[0,3,'次'],maxSummaryChars:[100,100000,'字'],verificationMaxFacts:[1,100,'条'],preserveRecentTokens:[1000,100000,'token'],autoFoldTargetTokens:[8192,10000000,'token'],outputTokens:[256,128000,'token'],plannerOutputTokens:[256,128000,'token'],claudeOutputTokens:[256,128000,'token'],reviewOutputTokens:[256,128000,'token'],verificationOutputTokens:[256,128000,'token'],claudeContextTokens:[4096,2000000,'token'],reviewContextTokens:[4096,2000000,'token']};
+const NUM={timeoutMs:[1000,580000,'ms'],replayTimeoutMs:[600000,3600000,'ms'],replaySliceCalls:[1,100,'次'],replayDailyCalls:[1,10000,'次'],replayDailyTokens:[1000,100000000,'token'],replaySliceMs:[1000,600000,'ms'],replayResumeMinutes:[1,1440,'分钟'],plannerTimeoutMs:[1000,120000,'ms'],retries:[0,3,'次'],maxSummaryChars:[100,100000,'字'],verificationMaxFacts:[1,100,'条'],preserveRecentTokens:[1000,100000,'token'],autoFoldTargetTokens:[8192,10000000,'token'],rollingTriggerTokens:[8192,10000000,'token'],rollingOutputTokens:[1024,128000,'token'],rollingMaxSummaryChars:[4000,400000,'字'],rollingContextTokens:[4096,2000000,'token'],rollingPlanTimeoutMs:[10000,300000,'ms'],outputTokens:[256,128000,'token'],plannerOutputTokens:[256,128000,'token'],claudeOutputTokens:[256,128000,'token'],reviewOutputTokens:[256,128000,'token'],verificationOutputTokens:[256,128000,'token'],claudeContextTokens:[4096,2000000,'token'],reviewContextTokens:[4096,2000000,'token']};
 const SELECT={verificationProvider:[['claude','Claude'],['openai','OpenAI 兼容接口']],reasoningEffort:[['none','不推理'],['low','低'],['medium','中'],['high','高'],['xhigh','很高'],['max','最高']]};
-const MODEL=['aProvider','aModel','claudeModel','reviewModel','plannerModel','verificationModel'];
+const MODEL=['aProvider','aModel','claudeModel','reviewModel','plannerModel','verificationModel','rollingModel'];
 const ENV=['claudeKeyEnv','reviewKeyEnv'],URLS=['claudeBase','reviewBase'];
-const MONO=new Set([...MODEL,...ENV,...URLS]);
+const LOCAL_URLS=['rollingBase'],PATHS=['rollingKeyFile'];
+const MONO=new Set([...MODEL,...ENV,...URLS,...LOCAL_URLS,...PATHS]);
 
 const GROUPS=[
  {id:'models',title:'模型',sub:'每个阶段调用的模型。密钥只从本机环境变量读取，不会写进设置。',fields:[
@@ -304,8 +305,12 @@ const GROUPS=[
  {id:'budget',title:'时间与篇幅',sub:'超时或超出篇幅时整批放弃，会话原文保持不变。',fields:[
   ['timeoutMs','单次压缩流水线超时'],['plannerTimeoutMs','规划超时'],
   ['maxSummaryChars','每段摘要字数上限'],['verificationMaxFacts','核验引用的关键事实'],
-  ['preserveRecentTokens','不压缩的最近历史'],['autoFoldTargetTokens','自动折叠目标','关闭模型规划时决定何时折叠；开启规划时同样写入引擎，须在有效范围内'],
+  ['preserveRecentTokens','不压缩的最近历史（初始值）','开着规划时，每个会话保留多少最近原文由模型在规划时决定；这里只在模型还没决定、或关闭规划时使用'],['autoFoldTargetTokens','自动折叠目标','关闭模型规划时决定何时折叠；开启规划时同样写入引擎，须在有效范围内'],
   ['retries','网络失败重试']]},
+ {id:'rolling',title:'滚动整段摘要',toggle:['rollingEnabled','由 Gemini 滚动重写整段旧历史','上下文达到“开始考虑的大小”后，由 Gemini 判断现在滚还是再等、在哪个话题停顿处切；切点之前的全部历史（包括已有摘要）合并成一份新摘要，读旧摘要加新消息，不重读旧原文，切点之后原样保留。内容筛选和事实核验照常进行，原文仍可取回。改动开关后需重启 DSH 让引擎读到新设置。'],sub:'经 Antigravity（CLIProxyAPI）调用，与生活插件共用同一入口和暂停状态。密钥从本机文件读取，不写进设置。',fields:[
+  ['rollingTriggerTokens','开始考虑的大小','上下文达到这里（或窗口 60%）时才问模型；何时滚、从哪切、要不要再等由模型决定'],['rollingPlanTimeoutMs','滚动规划超时','后台进行，不影响前台回复'],['rollingModel','滚动模型'],
+  ['rollingOutputTokens','滚动输出上限','包含思考 token'],['rollingMaxSummaryChars','滚动摘要长度上限','滚动摘要单独的长度上限；在此之内写多长由 Gemini 决定，普通分段摘要仍按“摘要长度上限”'],['rollingContextTokens','滚动上下文预算'],
+  ['rollingBase','Antigravity 地址','本机 http 地址或 https 地址'],['rollingKeyFile','密钥文件','环境变量 CENSHU_CLIPROXY_KEY_FILE 优先']]},
  {id:'calibration',tab:'learning',title:'后台校准预算',sub:'初始化和完整验证分批进行。达到预算会暂停并保存进度；每日额度按 UTC 日期重置。保存的预算从下一批生效，不清空已验证的策略。',fields:[
   ['replayTimeoutMs','校准单次运行超时','默认 30 分钟，可设 10–60 分钟；已完成步骤会保留，恢复后接着验证'],
   ['replaySliceCalls','每批模型请求上限','默认 12 次；A、Claude、审核、核验及网络重试分别计数'],
@@ -335,6 +340,8 @@ function check(key,value){
  if(NUM[key]){const [lo,hi]=NUM[key];if(!/^\d+$/.test(text.trim()))return '请输入整数';const n=Number(text);return n<lo||n>hi?`请输入 ${fmt(lo)} 到 ${fmt(hi)} 之间的数`:'';}
  if(MODEL.includes(key))return !text.trim()?'不能为空':text.length>100?'最多 100 个字符':'';
  if(ENV.includes(key))return /^[A-Z][A-Z0-9_]{1,80}$/.test(text)?'':'用大写字母开头，只含大写字母、数字和下划线';
+ if(LOCAL_URLS.includes(key)){try{const u=new URL(text);const local=u.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(u.hostname);return !(local||u.protocol==='https:')||u.username||u.password||u.search||u.hash?'需要本机 http 或 https 地址，不能带账号、查询参数或锚点':'';}catch{return '不是有效的网址';}}
+ if(PATHS.includes(key))return !text.trim()?'不能为空':text.length>260?'最多 260 个字符':'';
  if(URLS.includes(key)){try{const u=new URL(text);return u.protocol!=='https:'||u.username||u.password||u.search||u.hash?'需要 https 地址，不能带账号、查询参数或锚点':'';}catch{return '不是有效的网址';}}
  return '';
 }
@@ -344,6 +351,7 @@ function changedKeys(a,b){if(!a||!b)return [];return Object.keys(a).filter(k=>St
 
 function healthOf(state,loadError){
  if(loadError&&!state)return ['bad','无法读取设置'];
+ if(state?.providerHealth?.blocked)return ['warn','摘要账户不可用，已暂停'];
  const v=state?.health;
  if(v==='ready')return ['ok','本地服务已就绪'];
  if(!v||v==='starting')return ['warn','本地服务启动中'];
@@ -367,9 +375,9 @@ function tokens(usage){
  }
  return any?`${fmt(i)} / ${fmt(o)}`:null;
 }
-const STAGE_NAME={A:'A 摘要',B:'B 摘要',review:'审核','fact-check':'核验'};
+const STAGE_NAME={A:'A 摘要',B:'B 摘要',review:'审核','fact-check':'核验','fact-repair':'事实修正','fact-trim':'精确删改','content-selection':'内容筛选','empty-range':'无对话段','literal-repair':'字面量修正',rolling:'滚动摘要'};
 const stageTone=s=>s==='success'?'ok':s==='failed'?'bad':'warn';
-const stageLabel=s=>s==='success'?'通过':s==='failed'?'失败':s==='paused'?'等待续跑':'进行中';
+const stageLabel=s=>s==='success'?'通过':s==='failed'?'失败':s==='paused'?'等待续跑':s==='fallback'?'改用替代':'进行中';
 function runStatus(r){
  if(r.status==='running')return ['warn','进行中'];
  if(r.status==='paused')return ['warn','预算暂停'];
@@ -431,7 +439,9 @@ function Field({k,label,hint,value,base,onChange}){
 }
 
 function Group({g,draft,base,set}){
- const grid=h('div',{className:'dcc-grid'},g.fields.map(([k,label,hint])=>h(Field,{key:k,k,label,hint,value:draft[k],base,onChange:set})));
+ const fieldGrid=h('div',{className:'dcc-grid'},g.fields.map(([k,label,hint])=>h(Field,{key:k,k,label,hint,value:draft[k],base,onChange:set})));
+ const toggle=g.toggle?h('div',{className:'dcc-toggle-row'+(base&&!!base[g.toggle[0]]!==!!draft[g.toggle[0]]?' is-changed':'')},h(Switch,{checked:!!draft[g.toggle[0]],label:g.toggle[1],onChange:v=>set(g.toggle[0],v)}),h('div',null,h('strong',null,g.toggle[1]),h('span',null,g.toggle[2]))):null;
+ const grid=toggle?h('div',null,toggle,fieldGrid):fieldGrid;
  if(g.collapsed){
   const open=g.fields.some(([k])=>check(k,draft[k])||(base&&String(base[k])!==String(draft[k])));
   return h('details',{className:'dcc-group',open:open||undefined},h('summary',null,g.title),h('p',{className:'dcc-sub'},g.sub),grid);
@@ -469,7 +479,7 @@ function RunBody({r}){
   h('div',{className:'dcc-meta'},
    typeof r.sourceChars==='number'?h('span',null,'原文 ',h('b',null,fmt(r.sourceChars)),' 字'):null,
    mode.length?h('span',null,mode.join('，')):null,
-   r.trigger?h('span',null,'入口：',({manual:'手动命令',tool:'会话工具',auto:'自动压缩',direct:'直接调用'})[r.trigger]||r.trigger):null,
+   r.trigger?h('span',null,'入口：',({manual:'手动命令',tool:'会话工具',auto:'自动压缩',rolling:'滚动摘要',direct:'直接调用'})[r.trigger]||r.trigger):null,
    r.policyVersion!==undefined?h('span',null,'摘要策略 v'+r.policyVersion+((r.policyRules||[]).length?' · '+r.policyRules.join(' / '):'')):null,
    r.configFingerprint?h('span',{title:r.configFingerprint},'配置指纹 ',r.configFingerprint.slice(0,12)):null,
    r.retryAfter?h('span',null,'自动重试最早时间 ',new Date(r.retryAfter).toLocaleString()):null,
@@ -477,7 +487,7 @@ function RunBody({r}){
   r.stages?.length?h('div',{className:'dcc-table-wrap'},h('table',{className:'dcc-table'},
    h('thead',null,h('tr',null,['阶段','模型','结果','用时','token 输入/输出','备注'].map(x=>h('th',{key:x,scope:'col'},x)))),
    h('tbody',null,r.stages.map((s,i)=>{
-    const notes=[s.outputChars!=null?`输出 ${fmt(s.outputChars)} 字`:null,s.evidenceCount!=null?`引证 ${s.evidenceCount} 条`:null,s.softLiteralWarnings?`字面量软警告 ${s.softLiteralWarnings}`:null,s.error||null].filter(Boolean);
+    const notes=[s.status==='fallback'?(s.fallbackTo?`改用 ${s.fallbackTo} 摘要`:s.name==='fact-trim'?'改用重写':null):null,s.kept!=null?`保留 ${s.kept} 段、丢弃 ${s.discarded} 段`:null,s.partial?`其中部分保留 ${s.partial} 段`:null,s.partialFallbacks?`摘录不合格改整段 ${s.partialFallbacks} 段`:null,s.keptChars!=null&&s.totalChars?`原文 ${fmt(s.keptChars)}/${fmt(s.totalChars)} 字`:null,s.exclusionAudit?`复核恢复 ${s.exclusionAudit.restored} 段`+(s.exclusionAudit.restoredSpans?`、摘录恢复 ${s.exclusionAudit.restoredSpans} 段`:'')+(s.exclusionAudit.spanFallbacks?`、摘录不合格改整段 ${s.exclusionAudit.spanFallbacks} 段`:''):null,s.contentRepair?.advice?.length?`修法建议 ${s.contentRepair.advice.map(a=>({trim:'删改',rewrite:'重写','keep-original':'保留原文',none:'未给'})[a]||a).join('、')}`+(s.contentRepair.stoppedByAdvice?'（按建议停止修正）':''):null,s.verification?.minor?`放过小问题 ${s.verification.minor} 处`:null,s.outputChars!=null?`输出 ${fmt(s.outputChars)} 字`:null,s.evidenceCount!=null?`引证 ${s.evidenceCount} 条`:null,s.softLiteralWarnings?`字面量软警告 ${s.softLiteralWarnings}`:null,s.error||null].filter(Boolean);
     return h('tr',{key:i},
      h('td',null,STAGE_NAME[s.name]||s.name),h('td',{className:'dcc-mono'},s.model||'—'),
      h('td',null,h('span',{className:'dcc-badge dcc-tone-'+stageTone(s.status)},stageLabel(s.status))),
@@ -505,7 +515,7 @@ function Runs({runs,notice,onRefresh}){
    return h('details',{key:r.id,className:'dcc-run'},
     h('summary',null,
      h('span',{className:'dcc-time'},clock(r.startedAt)),
-     h('span',{className:'dcc-kind'},r.kind==='planning'?'规划':'摘要'),
+     h('span',{className:'dcc-kind'},r.kind==='planning'?(r.rolling?'滚动规划':'规划'):'摘要'),
      h('span',null,h('span',{className:'dcc-badge dcc-tone-'+tone},label)),
      h('span',{className:'dcc-dur'},duration(elapsedOf(r))),
      h('span',{className:'dcc-detail'},detail)),
@@ -571,6 +581,7 @@ function CalibrationCard({replay,calibration,config,draft,set,onAction}){
   replay?.error?h('div',{className:'dcc-callout is-warn',role:'status'},h('p',null,replay.error)):null,
   h('div',{className:'dcc-actions'},
    h('button',{type:'button',className:'dcc-btn dcc-btn-primary',disabled:!config?.enabled||replay?.running,onClick:()=>onAction()},replay?.running?'正在回放…':enabled?'继续 / 开始校准':'运行三路诊断（不启用自动校准）'),
+   h('button',{type:'button',className:'dcc-btn',disabled:!config?.enabled||replay?.running,onClick:()=>onAction('restart-fixture-baseline'),title:'归档本次校准进度，重新出题并运行基线；保留正式策略与当日调用预算'},'重新建立校准基线'),
    enabled?h('p',{className:'dcc-hint'},'手动继续同样遵守每日预算；恢复不会把已完成的同一轮任务重新计作独立验证。'):null),
   last?h('details',{className:'dcc-more'},h('summary',null,progress?'本次运行用量':'最近一次运行用量'),
    h('div',{className:'dcc-meta'},
@@ -673,7 +684,7 @@ function tabBadge(keys,changes,errors){
  const bad=errors.filter(k=>keys.has(k)).length,changed=changes.filter(k=>keys.has(k)).length;
  return bad?h('span',{className:'dcc-count dcc-tone-bad'},bad+' 项需修改'):changed?h('span',{className:'dcc-count dcc-tone-accent'},changed+' 项未保存'):null;
 }
-const SETTINGS_KEYS=new Set(GROUPS.filter(g=>!g.tab).flatMap(g=>g.fields.map(([k])=>k)));
+const SETTINGS_KEYS=new Set(GROUPS.filter(g=>!g.tab).flatMap(g=>[...g.fields.map(([k])=>k),...(g.toggle?[g.toggle[0]]:[])]));
 const LEARNING_KEYS=new Set([...GROUPS.filter(g=>g.tab==='learning').flatMap(g=>g.fields.map(([k])=>k)),'replayFeedbackEnabled','replayHarvestEnabled','replayFreshQuestions']);
 const TABS=[['settings','设置'],['semantic','语义与媒体检索'],['learning','学习与校准'],['runs','运行记录']];
 const SEMANTIC_FIELDS=[
@@ -777,6 +788,7 @@ function Semantic({active}){
     h('div',null,h('h3',{className:'dcc-sem-title',id:'dcc-sem-title'},'精确搜索与多模态回忆'),h('p',{className:'dcc-lede'},'原文继续留在本机；Gemini Embedding 2 为授权资料生成语义向量，再与 SQLite FTS5 融合。')),
     h('span',{className:'dcc-pill dcc-tone-'+tone,role:'status'},h('span',{className:'dcc-dot'}),h('span',null,flag))),
    h('p',{className:'dcc-sem-notice'},value?.notice||'正在读取语义索引设置…'),
+   h('p',{className:'dcc-sem-notice'},'证据重排与第二跳检索：'+(value?.relevanceRoute?.provider==='antigravity'?'Antigravity OAuth':'Google API')+' · '+(value?.relevanceRoute?.model||draft?.relevanceModel||'待读取')+'。Hydrogen 与外部模型设置页的调用入口统一切换；Embedding 2 始终使用 Google API。'),
    issue?h('div',{className:'dcc-issue',role:'alert'},h('span',{className:'dcc-issue-icon','aria-hidden':'true'},'!'),
     h('div',{className:'dcc-issue-body'},h('strong',null,issue[0]),h('p',null,issue[1]),issue[2]?h('code',null,problem):null)):null,
    notice?h('p',{className:'dcc-flash dcc-tone-ok',role:'status'},notice):null,
@@ -866,6 +878,7 @@ function Panel(){
   h(R.Fragment,null,
    h(Flow,{d:draft,set,saved:base?String(base.enabled)===String(draft.enabled):true}),
    h(PolicyScope,{scope:state?.replay?.scope}),
+   state?.providerHealth?.blocked?h('section',{className:'dcc-card is-attention'},h('h3',null,'摘要 A 暂停'),h('p',null,state.providerHealth.provider+' / '+state.providerHealth.model+' · HTTP '+state.providerHealth.status+' · '+state.providerHealth.message),h('p',null,'发现于 '+new Date(state.providerHealth.at).toLocaleString()+'。已停止自动启动筛选与双路摘要，原始历史保留。恢复余额或权限后解除暂停；下一次压缩会重新检查账户。'),h('button',{type:'button',className:'dcc-btn',onClick:()=>replay('retry-summary-provider')},'重新检查摘要 A')):null,
    h('div',{className:'dcc-tabs',role:'tablist','aria-label':'协作压缩设置'},TABS.map(([id,title],i)=>{
     const badge=id==='settings'?tabBadge(SETTINGS_KEYS,changes,errors):id==='learning'?tabBadge(LEARNING_KEYS,changes,errors)||h('span',{className:'dcc-count dcc-tone-'+learning.tone},learning.short):id==='runs'&&failed?h('span',{className:'dcc-count dcc-tone-bad'},`${failed} 次失败`):null;
     return h('button',{key:id,type:'button',role:'tab',id:'dcc-tab-'+id,'aria-selected':tab===id?'true':'false','aria-controls':'dcc-panel-'+id,tabIndex:tab===id?0:-1,className:'dcc-tab',

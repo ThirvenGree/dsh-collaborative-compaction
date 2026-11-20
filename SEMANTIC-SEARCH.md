@@ -55,11 +55,15 @@ Gemini Embedding 2 的视频嵌入不包含音频，因此音轨必须单独处�
 
 配置路径：`BILI_SEMANTIC_CONFIG_FILE`，否则在 `BILI_CONFIG_FILE` 同目录，或 `XDG_CONFIG_HOME/billion-context/semantic-search.json`；默认是 `~/.config/billion-context/semantic-search.json`。不改写既有压缩配置。保存采用版本校验，避免两个设置页互相覆盖。
 
-默认模型 `gemini-embedding-2`、1536 维，密钥从 `GEMINI_API_KEY` 读取；Windows 也异步读取用户和系统环境变量并缓存。不在设置页、日志或仓库输出密钥。768/1536/3072 维均可选择。相关性和第二跳使用单独的 Gemini 生成模型设置，默认 `gemini-3.8-flash`。
+默认模型 `gemini-embedding-2`、1536 维，密钥从 `GEMINI_API_KEY` 读取；Windows 也异步读取用户和系统环境变量并缓存。不在设置页、日志或仓库输出密钥。768/1536/3072 维均可选择。相关性和第二跳的模型默认 `gemini-4-hydrogen`。安装了岑舒生活共享入口时，该模型跟随「外部模型运行状态」里的 Google API / Antigravity 全局选择，使用 high；设置页显示实际提供方，运行回执使用 `history-evidence-relevance`。两边的暂停和错误分开处理，不因一边失败自动切换另一边。Embedding 2 仍通过 Google API，向量模型、维度与索引不随 Hydrogen 入口切换。
 
 每次 HTTP 请求（包括 countTokens、重试、相关性判断）在发出前预扣调用预算，成功后记录返回的 token。查询、索引与重试共用配置预算。限额不是精确费用报价。初次给长历史建索引需要额外调用，应按设置页进度判断完成情况。
 
 新安装默认关闭语义和媒体开关；用户本机经授权可直接开启。已有压缩、回放校准和 FTS5 配置保持原值。FFmpeg 用于音视频切片；PDF 处理使用锁定的 `pdf-lib 1.17.1`，随引擎构建。
+
+媒体提取识别已保存的 Responses `function_call_output.output` 类型化附件，包括图片、音频、视频和 PDF，并支持 CAS 文件引用。普通文本中的路径、工具调用参数和推理内容不作为附件采集。提取器升级后重新扫描原来源，按稳定标识复用已生成的文字向量；不会要求为未变化文字重新付费。多会话扫描分批轮转，本机分钟预算耗尽只等待额度重置，不累计成上游失败重试。
+
+2026-11-14 维护验证：五类人工素材均通过真实 Embedding 2 调用并返回 1536 维向量；Antigravity 冷却后单次复测和两跳证据检索成功，与 Google 同题检查一致。该验证只证明本轮连接、格式、引用和二次检索可用，不代表长期可用性或检索准确率保证。
 
 ## 验证与边界
 

@@ -93,3 +93,5 @@ test('resuming full verification preserves completed stages but two replication 
  assert.equal((await run()).status,'promoted');assert.equal(calls,completedTotal);assert.equal(proposals,1);
  assert(phases.some(p=>p.endsWith('candidate-repeat-2')));
 });
+import {discardRejectedGroup} from '../replay-checkpoint.js';
+test('a rejected group only invalidates its own generation checkpoints',()=>{const task={inputHash:'a'.repeat(64),value:'ok',completedAt:1};const state={schema:1,tasks:{'bootstrap/compression/0':task,'bootstrap/compression/0/stage:A':task,'bootstrap/compression/1':task,'suite/fresh':task},completed:4};const next=discardRejectedGroup(state,'bootstrap/compression/0');assert.deepEqual(Object.keys(next.tasks),['bootstrap/compression/1','suite/fresh']);assert.equal(next.completed,2);assert.equal(state.completed,4);});

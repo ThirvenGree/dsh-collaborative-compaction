@@ -77,7 +77,7 @@ async function regenerated(suites,policy,{options,compress,onlyIds}){
   const noise=background.map((text,i)=>({id:'noise-'+i,role:'assistant',text}));
   const records=source.flatMap((r,i)=>noise[i]?[noise[i],r]:[r]).concat(noise.slice(source.length));
   const content=records.map(r=>'['+r.id+'] '+r.text).join('\n');
-  const work={content,reference:'',instructions:'Summarize the current decisions and task state. Cite relevant record IDs as [id] alongside short exact evidence where available.',trigger:'calibration',minSummaryChars:1,maxSummaryChars:420};
+  const work={content,reference:'',instructions:'Summarize the current decisions and task state. For each retained key fact, keep its source record ID followed by a short VERBATIM evidence span in the format [id] exact source text. These IDs occur in the selected history and are required for evidence retrieval. Do not remove source labels during reconciliation. Preserve corrections and uncertain action outcomes; omit irrelevant background before discarding evidence labels. Do not invent evidence or copy answers from outside the source.',trigger:'calibration',minSummaryChars:1,maxSummaryChars:420};
   const key=`compression/${index}`;
   const summary=await checkpointTask(options,key,{work,policy},()=>compress(work,policy,{phase:options.phase||'feedback',key}));
   const summaryCitations=citedSpans(summary,records);

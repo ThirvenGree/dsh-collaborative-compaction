@@ -77,7 +77,7 @@ test('a correct answer with no source labels is not a compression omission',asyn
 });
 
 test('source must answer the omission question with real citations',async()=>{
- const h=harness({reader:(row,input)=>row.id==='formal-omission'&&input.material.includes('[formal-0')?{answer:'另一个版本',citations:[]}:null});
+ const h=harness({reader:(row,input)=>row.id==='formal-omission'&&input.material.includes('"id":"formal-0"')?{answer:'另一个版本',citations:[]}:null});
  const result=await h.run();assert.equal(result.status,'held');assert.match(result.reason,/没有复现/);assert.equal(h.audits.length,0);
 });
 
@@ -119,8 +119,8 @@ test('semantic privacy, fidelity, answer reliability and prompt-injection approv
 
 test('review approval does not substitute for synthetic originals or reproducing the omission',async()=>{
  const failures=[
-  (row,input)=>row.id===group.positive.id&&input.material.includes('[trial-mode-record')?{answer:'unknown',citations:[]}:null,
-  (row,input)=>row.id===group.counter.id&&input.material.includes('[wax-proposal-record')?{answer:'蓝蜡',citations:[]}:null,
+  (row,input)=>row.id===group.positive.id&&input.material.includes('"id":"trial-mode-record"')?{answer:'unknown',citations:[]}:null,
+  (row,input)=>row.id===group.counter.id&&input.material.includes('"id":"wax-proposal-record"')?{answer:'蓝蜡',citations:[]}:null,
   (row,input)=>row.id===group.probe.id&&input.material===group.probe.summary?{answer:row.expected,citations:[]}:null
  ];
  for(const reader of failures){const h=harness({reader}),result=await h.run();assert.equal(result.status,'held');assert.match(result.reason,/脱敏后/);assert.equal(h.audits.length,1);}

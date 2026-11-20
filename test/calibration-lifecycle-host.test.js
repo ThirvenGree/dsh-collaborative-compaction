@@ -104,7 +104,7 @@ test('calibration lifecycle releases failed leases, refreshes inconclusive basel
    const call=await reset();write('config',{...base,factCheckEnabled:true,verificationProvider:'openai',reviewKeyEnv:'LIFECYCLE_TEST_KEY',reviewBase:'https://lifecycle.invalid/v1'});mode='reject';await trigger(call);
    const report=await until(()=>fs.existsSync(files['fixture-replay'])?read(files['fixture-replay']):null,'content rejection did not settle');
    assert.equal(report.feedback.status,'paused',report.feedback.reason);assert.equal(report.feedback.pauseKind,'content-rejected');
-   const job=read(files['calibration-checkpoint']);assert.equal(job.checkpoint.completed,0);assert.equal(read(files['compression-policy']).nextRetryAt,Number.MAX_SAFE_INTEGER);
+   const job=read(files['calibration-checkpoint']);const rejected=report.feedback.calibrationGroup;assert.ok(rejected);assert.ok(Object.keys(job.checkpoint.tasks).every(key=>key!==rejected&&!key.startsWith(rejected+'/')));assert.equal(read(files['compression-policy']).nextRetryAt,Number.MAX_SAFE_INTEGER);
    const before=readers+summaries;await trigger(call);await delay(30);
    assert.equal(readers+summaries,before,'a new production compression must not retry deterministically rejected calibration');assert.equal(read(files['calibration-checkpoint']).id,job.id);
    mode='good';const retried=await call('/v1/replay');

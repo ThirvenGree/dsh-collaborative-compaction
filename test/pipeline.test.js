@@ -19,6 +19,19 @@ test('empty, oversized, cancelled and context overflow rejected',async()=>{asser
 const {planCompression}=await import('../runtime.js');
 const structured=value=>async()=>({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(value)}]}],usage:{input_tokens:12,output_tokens:5}});
 
+test('transport range labels stay outside source facts; genuine source identifiers remain checked',async()=>{
+ const {summaryInstructions,validateLiterals}=await import('../runtime.js');
+ const input={...work,instructions:'Summarize range m00001-m00002; preserve facts.',reference:'[m00001-m00002] adjacent context'};
+ const calls=[];
+ await runPipeline(input,async()=>result,{settings:c,transport:transport(calls)});
+ for(const prompt of [summaryInstructions(input,c),calls[0].body.compaction.instructions,calls[1].body.instructions]){
+  assert.match(prompt,/range labels, message references and transport identifiers/);
+  assert.match(prompt,/unless they also occur verbatim in the selected history/);
+ }
+ assert.throws(()=>validateLiterals('历史 m00001-m00002：'+result,work.content),/Unanchored/);
+ assert.doesNotThrow(()=>validateLiterals('引用 m00001；参数 restoreDelayMs=87000。','原记录 m00001，restoreDelayMs=87000。'));
+});
+
 test('production observer sees completed and fact-rejected candidates without storing them or blocking delivery',async()=>{
  const source='保密来源只存在内存中：纸卡寄到前要先盖蓝章。',summary='纸卡会寄出。';
  const w={content:source,instructions:'',maxSummaryChars:200,trigger:'tool'};
@@ -106,7 +119,9 @@ test('path quoting and percent typography preserve values',async()=>{
  assert.throws(()=>validateLiterals(file.replace('clip','other'),file),/Unanchored/);
  assert.throws(()=>validateLiterals('完成21%','完成20％'),/Unanchored/);
 });
-test('hard pressure skips deterministic cooldown, never in-flight dedup; transient 429 never arms cooldown',async()=>{
+// 2026-11-14: hard pressure now respects the deterministic cooldown (the engine skips that range and keeps other folds);
+// a manual request still bypasses it, in-flight dedup always applies, and a transient 429 never arms it.
+test('deterministic cooldown applies under hard pressure, manual bypasses it, never in-flight dedup; transient 429 never arms cooldown',async()=>{
  const item={...work,trigger:'auto',reference:'cooldown fixture'};
  let count=0,mode='reject',release;
  const gate=new Promise(resolve=>{release=resolve;});
@@ -120,8 +135,9 @@ test('hard pressure skips deterministic cooldown, never in-flight dedup; transie
  }});
  await assert.rejects(run(item),/stage=fact-check/);
  await assert.rejects(run({...item,reference:'changed'}),/stage=backoff/);
- mode='hold';const pending=run({...item,pressure:'hard'});
- await assert.rejects(run({...item,pressure:'hard'}),/already running/);
+ await assert.rejects(run({...item,pressure:'hard'}),/stage=backoff/);
+ mode='hold';const pending=run({...item,trigger:'manual'});
+ await assert.rejects(run({...item,trigger:'manual'}),/already running/);
  release();await pending;
  mode='429';await assert.rejects(run(item),/stage=review Provider HTTP 429/);
  mode='good';await run({...item,pressure:'hard'});

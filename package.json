@@ -66,7 +66,11 @@
     "replay-live.mjs",
     "replay-checkpoint.js",
     "calibration-budget.js",
-    "semantic-host.js"
+    "semantic-host.js",
+    "chat-scope.js",
+    "conversation-selection.js",
+    "provider-health.js",
+    "conversation-policy.js"
   ],
   "dependencies": {
     "js-tiktoken": "1.0.21"

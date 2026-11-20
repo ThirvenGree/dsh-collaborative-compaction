@@ -4,6 +4,29 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {fixtureCases,runReplaySuite,screenMethod,replaySearch} from '../replay.js';
 const fixture=fixtureCases[0];
 const correct={answer:fixture.expected,citations:[{id:'r1',quote:fixture.expected}]};
+test('replay directory IDs open only an exact record in the current scope',()=>{
+ const observed=[];let searches=0;
+ const search=replaySearch(()=>{searches++;return '';});
+ const rows=[{id:'ev:receipt',role:'tool',text:'编号不在正文内的真实回执'}];
+ for(const query of ['ev:receipt','open:ev:receipt'])assert.equal(JSON.parse(search(rows,query,'case',(id,text)=>observed.push({id,text}))).text,rows[0].text);
+ assert.equal(search(rows,'ev:other','case'), '[无匹配]');assert.equal(searches,1);assert.equal(observed.length,2);
+ const second={id:'ev:second',role:'tool',text:'第二条原文'};
+ assert.deepEqual(JSON.parse(search([...rows,second],'ev:receipt open:ev:second','case')).map(r=>r.id),['ev:receipt','ev:second']);
+ assert.equal(search([...rows,second],'ev:receipt ev:unknown','case'),'[无匹配]');
+});
+test('method replay separates record IDs from roles and states citation coverage without leaking expected answers',async()=>{
+ const probe={id:'use',question:'条件甲',records:[{id:'ev:1',role:'tool',text:'已核对成功回执'},{id:'ev:2',role:'assistant',text:'明确未发出请求'}],expected:'use',requiredIds:['ev:1','ev:2']};
+ const seen=[];
+ const result=await screenMethod({candidateId:'shape-check',method:'先核对回执，未发出则修正输入',probes:[probe,{...probe,id:'avoid',question:'条件乙',expected:'avoid'}]}, {
+  generate:async(system,input)=>{
+   seen.push(input);assert.deepEqual(input.requiredEvidenceIds,['ev:1','ev:2']);assert.equal(input.expected,undefined);
+   if(input.material.startsWith('{'))assert.deepEqual(input.material.split('\n').map(line=>JSON.parse(line).id),['ev:1','ev:2']);
+   if(!input.material.startsWith('{')&&!input.recall)return system.includes('可先')?{query:'回执'}:{answer:'unknown',citations:[]};
+   return {answer:input.question.startsWith('条件甲')?'use':'avoid',citations:probe.records.map(r=>({id:r.id,quote:r.text}))};
+  },search:(_rows,_q,_id,emit)=>{for(const r of probe.records)emit(r.id,r.text);return JSON.stringify(probe.records);}
+ });
+ assert.equal(result.status,'supported');assert.ok(seen.length>=8);
+});
 test('isolated replay always opts out of persistent process search caches',()=>{
  let received;
  const search=replaySearch((...args)=>{received=args;return 'evidence';});

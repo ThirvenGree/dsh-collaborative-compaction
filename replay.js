@@ -23,12 +23,12 @@ export const fixtureCases=[
  {id:'omitted-tool',question:'此前审核通过的只读工具确切叫什么？用工具名作答。',expected:'listen_frame_Q7',requiredIds:['r1'],requiredQuotes:{r1:'listen_frame_Q7'},
   records:[{id:'r1',role:'tool',text:'审核回执：只读工具标识为 listen_frame_Q7，用于核对片段。'}],
   summary:'工具审核通过，可用一个只读工具核对片段。'},
- {id:'later-correction',question:'按青枔最后的更正，实验盒现在放在哪个格？只回答格号。',expected:'西格-17',requiredIds:['r3'],requiredQuotes:{r3:'西格-17'},
-  records:[{id:'r2',role:'user',text:'实验盒先放东格-14。'},{id:'r3',role:'user',text:'更正上一条：实验盒放西格-17。',corrects:'r2'}],
-  summary:'青枔安排过实验盒的位置。r2：实验盒先放东格-14。'},
- {id:'unconfirmed-click',question:'是再次提交（submit）、检查回执（verify），还是已经可以报告完成（done）？只输出相应英文动作。',expected:'verify',requiredIds:['r5'],requiredQuotes:{r5:'回执未到'},
-  records:[{id:'r4',role:'user',text:'可以提交这个合成演示表单一次。'},{id:'r5',role:'tool',text:'提交按钮已点击一次，回执未到；结果尚未确认。'}],
-  summary:'已得到用户对一次表单提交的授权。'},
+ {id:'later-correction',question:'按最后的更正，借阅资料卡现在放在哪个格？只回答格号。',expected:'西格-17',requiredIds:['r3'],requiredQuotes:{r3:'西格-17'},
+  records:[{id:'r2',role:'user',text:'借阅资料卡先放东格-14。'},{id:'r3',role:'user',text:'更正上一条：借阅资料卡放西格-17。',corrects:'r2'}],
+  summary:'管理员安排过借阅资料卡的位置。r2：借阅资料卡先放东格-14。'},
+ {id:'unconfirmed-click',question:'借阅单应重新递交（submit）、检查回执（verify），还是已经可以报告完成（done）？只输出相应英文动作。',expected:'verify',requiredIds:['r5'],requiredQuotes:{r5:'回执未到'},
+  records:[{id:'r4',role:'user',text:'管理员同意递交一张纸质借阅单，只登记一次。'},{id:'r5',role:'tool',text:'纸质借阅单已递交，回执未到；登记结果尚未确认。'}],
+  summary:'管理员同意了一次借阅登记。'},
  {id:'adequate-summary-control',question:'门牌上写着哪个格号？答案仅填格号。',expected:'北格-16',requiredIds:['r6'],requiredQuotes:{r6:'北格-16'},
   records:[{id:'r6',role:'tool',text:'现场门牌写着北格-16。'}],summary:'[r6] 现场门牌写着北格-16。',summaryCitations:[{id:'r6',quote:'现场门牌写着北格-16。'}]}
 ];
@@ -69,14 +69,16 @@ export async function runReplaySuite({cases,generate,search,provider,model,signa
   const lanes={};
   for(const lane of ['full','summary','retrieval']){
    signal?.throwIfAborted();if(providerFailure){lanes[lane]={pass:false,calls:0,queries:[],skipped:true,error:providerFailure};continue;}
-   const material=lane==='full'?test.records.map(({id,role,text,corrects})=>'['+id+' '+role+(corrects?' corrects '+corrects:'')+'] '+text).join('\n'):test.summary;
+   // Keep the record ID separate from role/correction metadata. A combined
+   // "[id tool]" header was being copied verbatim as a nonexistent citation ID.
+   const material=lane==='full'?test.records.map(({id,role,text,corrects})=>JSON.stringify({id,role,text,...(corrects?{corrects}:{})})).join('\n'):test.summary;
    const turns=[],queries=[];let calls=0;const {visible,add}=visibleEvidence(test,lane);
    try{
     for(;;){
      signal?.throwIfAborted();if(providerFailure)throw Object.assign(Error(providerFailure),{stopReplay:true});
      const allow=lane==='retrieval'&&queries.length<maxQueries;
-     const prompt=system+(allow?' 本轮有只读 search_context；如需原文可先只返回 {"query":"关键词"}。用简短、出现在记录中的关键词；如需展开整条，使用返回的 open: 引用。':' 现在提交最终回答。');
-     const input={question:test.question,...(method?{method}:{}),material,...(turns.length?{recall:turns}:{})};
+     const prompt=system+(method?' requiredEvidenceIds 是需核对的原记录编号，不是答案。只有读到这些记录时才能逐字引用；编号不包含 role 等字段。候选 method 不是原始证据，不能引用为证据。未取得所需原文时先检索；无法取得则回答 unknown，不编造引用。':'')+(allow?' 本轮有只读 search_context；如需原文可先只返回 {"query":"关键词"}。用简短、出现在记录中的关键词；如需展开整条，使用返回的 open: 引用。':' 现在提交最终回答。');
+     const input={question:test.question,...(method?{method,requiredEvidenceIds:test.requiredIds}:{}),material,...(turns.length?{recall:turns}:{})};
      calls++;
      const read=async()=>{
       const result=await generate(prompt,input,{provider,model,signal:callSignal});
@@ -97,12 +99,21 @@ export async function runReplaySuite({cases,generate,search,provider,model,signa
     }
    }catch(error){if(signal?.aborted)throw signal.reason;if(error.paused||error.replayPause||error.checkpointFailure||['CALIBRATION_PAUSED','REPLAY_PAUSED'].includes(error.code))throw error;if(error.stopReplay){providerFailure??=String(error.message).slice(0,350);fatal.abort(error);}lanes[lane]={pass:false,calls,queries,error:providerFailure||String(error.message).slice(0,350)};}
   }
-  return {id:test.id,classification:classify(lanes),lanes};
+  return {id:test.id,classification:classify(lanes),lanes,materialAudit:{summary:test.summary,visibleCitations:test.summaryCitations||[]}};
  },{signal,concurrency});
  return {provider,model,probes};
 }
 export function replaySearch(searchEvidence){
  return (records,query,id,observe)=>{
+  // The replay directory exposes stable original IDs. Opening one is a scoped
+  // read, not a keyword query (the ID need not occur inside the record text).
+  const requested=String(query).trim().split(/[\s,、]+/).filter(Boolean).map(value=>value.replace(/^open:/,''));
+  const exact=requested.map(value=>records.find(record=>record.id===value));
+  if(exact.length>0&&exact.length<=8&&exact.every(Boolean)){
+   const unique=[...new Map(exact.map(record=>[record.id,record])).values()];
+   for(const record of unique)observe?.(record.id,record.text);
+   const values=unique.map(({id,role,text})=>({id,role,text}));return JSON.stringify(values.length===1?values[0]:values);
+  }
   const scope='isolated-replay:'+hash([id,records]);
   const session={id:scope,state:{blocks:[],messageRefs:{byRaw:{}}},blockContents:new Map()};
   return searchEvidence(session,query,4,[],records.map(r=>({...r,contentType:'text'})),undefined,observe,{cache:false})||'[无匹配]';
@@ -121,7 +132,7 @@ export async function screenMethod(input,options){
    return {id,role,text};
   });
   const ids=records.map(r=>r.id);if(new Set(ids).size!==ids.length||!Array.isArray(p.requiredIds)||!p.requiredIds.length||!p.requiredIds.every(id=>ids.includes(id)))throw Error('方法回放缺少可核对的引用');
-  return {id:p.id,records,expected:p.expected,requiredIds:p.requiredIds,question:p.question+' 在给定情境应采用候选方法用 use，否则用 avoid。',summary:'可按需回忆的记录编号：'+ids.join('、')};
+  return {id:p.id,records,expected:p.expected,requiredIds:p.requiredIds,question:p.question+' 最终 JSON 的 answer 必须严格为 use、avoid 或 unknown：当前情境适用候选方法填 use，不适用填 avoid，证据不足填 unknown。answer 内不要附带解释、标点或行动步骤；依据放在 citations。',summary:'可按需回忆的记录编号：'+ids.join('、')};
  });
  const result=await runReplaySuite({...options,cases,method});
  const supported=result.probes.every(p=>p.lanes.full.pass&&p.lanes.retrieval.pass&&p.lanes.retrieval.queries.length>0);

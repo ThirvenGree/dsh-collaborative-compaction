@@ -44,6 +44,9 @@ jobs:
       - name: Semantic recall, original media and isolated provider regressions
         run: node --import ./tests/preload-storage-baseline.mjs --import tsx --test tests/semantic-provider-media.test.ts tests/semantic-media-source.test.ts tests/semantic-engine-integration.test.ts tests/semantic-pair-context.test.ts tests/semantic-relevance.test.ts tests/semantic-route.test.ts tests/semantic-dist-smoke.test.ts tests/wire-contract-golden.test.ts
         working-directory: .engine
+      - name: Chat compression, rolling summaries and retrieval regressions
+        working-directory: .engine
+        run: node --import ./tests/preload-storage-baseline.mjs --import tsx --test tests/arrival-guard.test.ts tests/block-summary-1116.test.ts tests/chunk-message-boundary.test.ts tests/endless-chat-1118.test.ts tests/rolling-summary.test.ts tests/runtime-context-v2.test.ts tests/search-injected-context.test.ts tests/search-quality-1118.test.ts tests/semantic-warm.test.ts
       - name: Session directory discovery and original readback
         run: node --import ./tests/preload-storage-baseline.mjs --import tsx --test tests/session-directory.test.ts tests/session-directory-readonly.test.ts tests/session-directory-dist.test.ts
         working-directory: .engine

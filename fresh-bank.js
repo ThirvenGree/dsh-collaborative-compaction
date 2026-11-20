@@ -3,7 +3,7 @@
 // 仍不合格则用内置题。题目随任务存进检查点，分段续跑时沿用同一套，不会中途换题。
 import {validateFreshBase,builtinBase,FRESH_MECHANISMS} from './challenge-bank.js';
 
-export const freshPrompt=`Write a FRESH fictional replay suite that tests whether a conversation compressor keeps decision-critical information. Everything is invented: ordinary objects, places and tasks; no real names, accounts, credentials, URLs, email, phone numbers, filesystem paths or long numbers. Write all question/expected/record/summary text in Chinese. Do not reuse anything from input.avoid.
+export const freshPrompt=`Write a FRESH fictional replay suite that tests whether a conversation compressor keeps decision-critical information. Use ordinary library lending, catalog cards and paper handover scenarios. Everything is invented: ordinary objects, places and tasks; no real names, accounts, credentials, URLs, email, phone numbers, filesystem paths or long numbers. Write all question/expected/record/summary text in Chinese. Do not reuse anything from input.avoid.
 Return JSON {"theme":"<=12 Chinese characters","groups":[GROUP,GROUP,GROUP,GROUP],"control":CONTROL} and nothing else.
 The four GROUPs, in this exact order, each test one information-loss mechanism:
 1. identifier: a later step depends on an exact technical identifier (tool, part or file name) that a summary tends to drop.

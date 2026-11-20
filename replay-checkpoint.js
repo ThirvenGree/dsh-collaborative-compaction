@@ -4,6 +4,14 @@ const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('h
 const clone=value=>JSON.parse(JSON.stringify(value));
 const stale=()=>Object.assign(Error('Replay checkpoint no longer belongs to the active calibration'),{checkpointFailure:true,code:'REPLAY_STALE'});
 
+// Regenerate only the rejected compression group. Independent successful groups
+// remain reusable; readers already key their result by the exact material input.
+export function discardRejectedGroup(state,prefix){
+ if(typeof prefix!=='string'||!prefix)return {schema:1,tasks:{},completed:0};
+ const tasks=Object.fromEntries(Object.entries(state?.tasks||{}).filter(([key])=>key!==prefix&&!key.startsWith(prefix+'/')));
+ return {schema:1,tasks,completed:Object.keys(tasks).length};
+}
+
 // The host owns the job identity, lease and atomic file replacement. The save callback
 // must recheck those under its persistence lock. This helper additionally prevents an
 // obsolete async task from even requesting a write, and serializes parallel readers.

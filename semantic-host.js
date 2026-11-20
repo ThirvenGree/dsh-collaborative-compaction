@@ -36,7 +36,8 @@ export function createSemanticSettings({loadEngine,keyAvailable=async name=>!!pr
    const schema=await loadEngine(),saved=await read(schema);
    const status=aggregateSemanticStatus(await schema.loadStatus(saved.file));
    const ready=await keyAvailable(saved.config.keyEnv).catch(()=>false);
-   return {config:saved.config,revision:saved.revision,status,keyConfigured:ready,
+   const relevanceRoute=await schema.relevanceRouteStatus?.(saved.config.relevanceModel);
+   return {relevanceRoute,config:saved.config,revision:saved.revision,status,keyConfigured:ready,
     health:!ready&&saved.config.enabled?'未配置环境变量 '+saved.config.keyEnv:status?.lastError??null,
     notice:'精确全文索引保留；语义向量由 Google 生成。只索引已选择的会话及搜索时明确指定的目标，不扫描全盘。刷新本页不调用模型。'};
   }catch(error){return {config:null,status:null,health:safeError(error),available:false};}

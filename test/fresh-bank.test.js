@@ -44,7 +44,7 @@ test('fresh bases that would grade wrongly or leak are rejected', () => {
  bad(s=>{s.groups[0].positive.requiredQuotes.b1='wrench_K9';},/必需引用/);
  bad(s=>{s.groups[0].probe.summary+='工具柜登记：滴灌阀门检修指定扳手 wrench_K2。';},/重复段落|未见/);
  // reusing a built-in passage is rejected (the built-in questions stay the published fallback)
- bad(s=>{s.groups[3].counter.records[0].text='实验盒先放东格-14。';s.groups[3].counter.requiredQuotes.d4='东格-14';},/重复/);
+ bad(s=>{s.groups[3].counter.records[0].text='借阅资料卡先放东格-14。';s.groups[3].counter.requiredQuotes.d4='东格-14';},/重复/);
 });
 
 test('generation: approved suite is used; a rejected review or a dead model falls back to the built-in questions', async () => {

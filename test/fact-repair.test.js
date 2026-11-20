@@ -1,0 +1,9 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+process.env.DSH_COLLAB_TEST_HOME=fs.mkdtempSync(path.join(os.tmpdir(),'fact-repair-'));process.env.REPAIR_TEST_KEY='not-real';
+const {runPipeline,defaults,readNativeCompaction,factEvidenceStatus,runs}=await import('../runtime.js');
+const summary='先确认地址再寄出。',content='决定：先确认地址再寄出。';
+const settings={...defaults,enabled:true,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:true,verificationProvider:'openai',reviewKeyEnv:'REPAIR_TEST_KEY'};
+const value=quote=>({approved:true,missingCritical:[],unsupported:[],facts:[{summaryQuote:summary,sourceQuote:quote}]});
+test('one quote repair must still pass exact original and summary validation',async()=>{let calls=0;const out=await runPipeline({content,maxSummaryChars:100},async()=>summary,{settings,transport:async()=>({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(value(++calls===1?'先核对地址再寄出。':summary))}]}]})});assert.equal(out,summary);assert.equal(calls,2);assert.equal(runs()[0].stages.find(x=>x.name==='fact-check').quoteRepair.passed,true);});
+test('unsupported claims cannot enter the quote-only repair route',()=>{const v={...value(summary),unsupported:['错误承诺']};const result=factEvidenceStatus(v,summary,content,24);assert.equal(result.valid,false);assert.equal(result.repairable,false);});
+test('native refusal retains safe provider diagnostics and never produces fallback summary',()=>{assert.throws(()=>readNativeCompaction({id:'msg_example',model:'claude-haiku-5-5',stop_reason:'refusal',content:[],secret:'must not log'}),e=>{assert.equal(e.code,'CLAUDE_REFUSAL');assert.equal(e.providerDiagnostic.requestId,'msg_example');assert.ok(!JSON.stringify(e.providerDiagnostic).includes('must not log'));return true;});});
