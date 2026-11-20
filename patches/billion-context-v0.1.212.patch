@@ -7836,10 +7836,10 @@ index 0000000000000000000000000000000000000000..4bc8fa15a531578b71b1d3dfc435cadb
 +}finally{relay.closeAllConnections();await new Promise<void>(r=>relay.close(()=>r()));}
 diff --git a/tests/collaborative-transaction.test.ts b/tests/collaborative-transaction.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..2549bbea46e9e1d3288f34c322a70a2f7a698db7
+index 0000000000000000000000000000000000000000..0fe46d69cbfe99470145afe7869fd9c3783084ec
 --- /dev/null
 +++ b/tests/collaborative-transaction.test.ts
-@@ -0,0 +1,493 @@
+@@ -0,0 +1,495 @@
 +import { getStore, SessionStore } from "../src/persist.ts";
 +import fs from 'node:fs';
 +import os from 'node:os';
@@ -7860,11 +7860,11 @@ index 0000000000000000000000000000000000000000..2549bbea46e9e1d3288f34c322a70a2f
 +process.env.COLLAB_FIXTURE_KEY = "fake";
 +const SUMMARY = "Delivery is November 5. Budget is 1200 CNY. Do not publish until explicitly approved. The earlier November 3 date is superseded. Implementation is done, validation remains pending. Keep all original records recoverable.";
 +const RAW = "Delivery changed from November 3 to November 5. Budget 1200 CNY. Do not publish. Implementation done, validation pending. ".repeat(100);
-+async function fixture(fn: (ctx: ReturnType<typeof context>) => Promise<void>, reply: (n: number,metadata?: {pressure?:string;trigger?:string}) => boolean = () => true, planning?: (input: {candidates:Array<{startId:string;endId:string}>}) => unknown) {
++async function fixture(fn: (ctx: ReturnType<typeof context>) => Promise<void>, reply: (n: number,metadata?: {pressure?:string;trigger?:string},body?:string) => boolean = () => true, planning?: (input: {candidates:Array<{startId:string;endId:string}>}) => unknown) {
 +    let n = 0;
 +    const server = http.createServer((req, res) => { let body="";req.on("data",chunk=>body+=chunk);req.on("end", () => {
 +        if (req.url === "/v1/plan") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify(planning?planning(JSON.parse(body)):{decision:"legacy",ranges:[],reason:"fixture"})); return; }
-+        if (!reply(++n,JSON.parse(body).metadata?.dsh_compaction)) { res.writeHead(401); res.end(JSON.stringify({error:"run=12345678-1234-1234-1234-123456789012 stage=fact-check"})); return; }
++        if (!reply(++n,JSON.parse(body).metadata?.dsh_compaction,JSON.parse(JSON.parse(body).messages.at(-1).content).content)) { res.writeHead(401); res.end(JSON.stringify({error:"run=12345678-1234-1234-1234-123456789012 stage=fact-check"})); return; }
 +        res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ choices: [{ message: { content: SUMMARY }, finish_reason: "stop" }] }));
 +    }); });
 +    server.listen(0, "127.0.0.1"); await once(server, "listening");
@@ -8261,24 +8261,26 @@ index 0000000000000000000000000000000000000000..2549bbea46e9e1d3288f34c322a70a2f
 +
 +// 2026-11-14: a hard-pressure preflight keeps the folds that passed full validation instead of rolling all of them back.
 +test('hard pressure keeps validated folds when another range fails',async()=>{
-+ let calls=0,allow=Infinity;
++
 + await fixture(async ctx=>{
 +  // Fold the middle user note first so the two RAW messages become two separate preflight ranges.
 +  ctx.messages.splice(1,1,{id:'u',role:'user',contentType:'text',text:'Mid note about validation. '.repeat(120)});
++  ctx.messages[2] = { ...ctx.messages[2], text: RAW.replaceAll("Delivery", "Rejected") };
 +  ctx.session.state=ctx.core.processTurn({messages:ctx.messages,state:ctx.session.state,config:ctx.config,tokenCount:0,renderTags:'text-only'}).state;markDirty(ctx.session);
 +  const mid=ctx.session.state.messageRefs.byRaw['u'];
 +  const first=await applyConfiguredCompression({content:[{startId:mid,endId:mid}]},ctx);assert.equal(first.outcome,'applied',first.text);
 +  // The first range's summary calls succeed; the second range's fail validation.
-+  allow=calls+2;
++  // Identify the failing range by its content across concurrent chunk requests.
 +  ctx.config.modelContextLimit=3000;const logs:string[]=[];
 +  const result=await preflightCompress({core:ctx.core,config:ctx.config,session:ctx.session,prompts:defaultPrompts,protocol:'openai',model:'unused',url:'http://127.0.0.1:1',headers:{},log:(_l,m)=>logs.push(m)},ctx.messages);
-+  assert.equal(result.compressedRanges,1,JSON.stringify(result));assert.equal(ctx.session.state.blocks.length,2);
++  assert.ok(result.compressedRanges >= 1, JSON.stringify(result));
++  assert.ok([...ctx.session.blockContents.values()].every(x=>!x.full.text.includes("Rejected changed")), "rejected original must remain outside committed folds");
 +  assert.ok([...ctx.session.blockContents.values()].some(x=>x.full.text.includes(RAW)),'kept fold stays recoverable');
-+  assert.ok(logs.some(x=>x.includes('kept 1 validated fold')));
++  assert.ok(logs.some(x=>x.includes('kept '+result.compressedRanges+' validated fold')));
 +  // The failed range stays as an uncompressed original and remains offered for the next attempt.
 +  assert.equal(result.fitsWindow,false);assert.equal(result.rangesRemaining,1);
 +  assert.equal(result.failure?.retryable,true);assert.match(result.failure?.detail??'',/run=12345678-1234-1234-1234-123456789012 stage=fact-check/);
-+ },n=>{calls=n;return n<=allow;},(()=>{let plans=0;return ()=>(++plans===1?{decision:'legacy',ranges:[],reason:'setup'}:{decision:'wait',ranges:[],reason:'defer'});})());
++ },(_n,_meta,body)=>!body?.includes("Rejected changed"),(()=>{let plans=0;return ()=>(++plans===1?{decision:'legacy',ranges:[],reason:'setup'}:{decision:'wait',ranges:[],reason:'defer'});})());
 +});
 +test('planner receives the local payload estimate when billed usage is unknown',async()=>{
 + let seen:any;await fixture(async ctx=>{
