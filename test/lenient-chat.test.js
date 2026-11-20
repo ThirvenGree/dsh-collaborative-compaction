@@ -19,9 +19,13 @@ test('one anchored quote is enough only in lenient mode',()=>{
  const none={approved:true,missingCritical:[],unsupported:[],facts:[{summaryQuote:'不存在',sourceQuote:'不存在'}]};
  const r=factEvidenceStatus(none,summary,original,24,false,true);assert.equal(r.valid,false);assert.equal(r.repairable,true);
 });
-test('an approval without quotes passes only in lenient mode',()=>{
+// 2026-11-20: a non-empty chat summary needs one anchored quote even in lenient mode; without quotes it is sent
+// back for a quote recheck (repairable) instead of passing. An empty range still passes without quotes.
+test('an approval without quotes never passes for a non-empty chat summary',()=>{
  const v={approved:true,missingCritical:[],unsupported:[],facts:[]};
- assert.equal(factEvidenceStatus(v,summary,original,24,false,true).valid,true);
+ const lenient=factEvidenceStatus(v,summary,original,24,false,true);
+ assert.equal(lenient.valid,false);assert.equal(lenient.repairable,true);
+ assert.equal(factEvidenceStatus(v,summary,original,24,true,true).valid,true);
  assert.equal(factEvidenceStatus(v,summary,original,24,false,false).valid,false);
 });
 const settings={...defaults,enabled:true,claudeEnabled:false,reviewEnabled:false,factCheckEnabled:true,verificationProvider:'openai',reviewKeyEnv:'LENIENT_TEST_KEY'};

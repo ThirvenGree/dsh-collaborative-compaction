@@ -405,6 +405,8 @@ function Flow({d,set,saved}){
   h('div',{className:'dcc-track',role:'group','aria-label':'压缩流程'},
    node({name:'规划',toggle:'plannerEnabled',on:d.plannerEnabled,model:d.plannerModel,noteOn:'模型决定何时压缩、压哪一段',noteOff:'按引擎原有的阈值触发'}),
    link(),
+   node({name:'聊天筛选',toggle:'selectionEnabled',on:d.selectionEnabled!==false,model:`${d.reviewModel||''} · ${d.reviewBase||''}/responses`,noteOn:'聊天会话先由审核模型挑出实际对话（整段原文发给它）；剔除了内容时，再由核验模型 '+(d.verificationModel||'')+' 复核（同样收到整段原文）。只对聊天压缩范围内的会话生效',noteOff:'不筛选，不发送原文给这两个模型；整段原文直接交给摘要'}),
+   link(),
    h('div',{className:'dcc-pair'},
     node({name:'A 摘要',state:aRuns?'运行':'跳过',on:aRuns,model:`${d.aProvider||''}/${d.aModel||''}`,noteOn:'DSH 原有的摘要模型',noteOff:'Claude 开启且不审核时跳过'}),
     node({name:'B 摘要',toggle:'claudeEnabled',on:d.claudeEnabled,model:d.claudeModel,noteOn:'Claude 原生压缩',noteOff:'不调用 Claude'})),
@@ -496,6 +498,12 @@ function RunBody({r}){
   raw);
 }
 
+function Diagnostics({info,onAction}){
+ if(!info)return null;
+ return h('aside',{className:'dcc-flash dcc-tone-'+(info.count?'warn':'ok')},
+  h('p',null,'核验失败时留下的诊断：'+info.count+' 份，约 '+Math.ceil(info.bytes/1024)+' KB。里面有筛选后的聊天原文明文，最多保留 '+info.maxFiles+' 份、'+info.maxAgeDays+' 天。'),
+  h('button',{type:'button',className:'dcc-btn',disabled:!info.count,onClick:()=>onAction('clear-private-diagnostics')},'清理诊断'));
+}
 function Runs({runs,notice,onRefresh}){
  const [filter,setFilter]=R.useState('all');
  const sets={all:runs,summary:runs.filter(r=>r.kind!=='planning'),planning:runs.filter(r=>r.kind==='planning'),failed:runs.filter(r=>r.status==='failed'),paused:runs.filter(r=>r.status==='paused')};
@@ -890,7 +898,7 @@ function Panel(){
    h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-settings','aria-labelledby':'dcc-tab-settings',hidden:tab!=='settings'},h(Settings,{draft,base,set,retrieval:state?.retrieval})),
    h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-semantic','aria-labelledby':'dcc-tab-semantic',hidden:tab!=='semantic'},h(Semantic,{active:tab==='semantic'})),
    h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-learning','aria-labelledby':'dcc-tab-learning',hidden:tab!=='learning'},h(Learning,{state,draft,base,set,onAction:replay})),
-   h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-runs','aria-labelledby':'dcc-tab-runs',hidden:tab!=='runs'},h(Runs,{runs,notice:state?.notice,onRefresh:refresh})),
+   h('div',{className:'dcc-panel',role:'tabpanel',id:'dcc-panel-runs','aria-labelledby':'dcc-tab-runs',hidden:tab!=='runs'},h(Diagnostics,{info:state?.diagnostics,onAction:replay}),h(Runs,{runs,notice:state?.notice,onRefresh:refresh})),
    flash&&!changes.length?h('div',{className:'dcc-flash dcc-tone-'+flash.tone,role:'status'},flash.text):null,
    changes.length||(flash&&flash.tone==='bad')?h('div',{className:'dcc-bar',role:'region','aria-label':'未保存的更改'},
     h('div',{className:'dcc-bar-text',role:'status'},flash?.tone==='bad'?flash.text:errors.length?h(R.Fragment,null,h('strong',null,`${errors.length} 项需要修改`),'，改好后才能保存'):h(R.Fragment,null,h('strong',null,`${changes.length} 项更改`),'尚未保存')),

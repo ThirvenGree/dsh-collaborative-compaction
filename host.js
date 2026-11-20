@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {randomUUID,timingSafeEqual,randomBytes,createHash} from 'node:crypto';
-import {config,validateConfig,dataRoot,defaultRoot,activeProfile,migrateProfile,recoverRuns,runs,runPipeline,planCompression,planRolling,reviewProposedClause,getKey,summaryInstructions} from './runtime.js';
+import {diagnosticsInfo,clearDiagnostics,config,validateConfig,dataRoot,defaultRoot,activeProfile,migrateProfile,recoverRuns,runs,runPipeline,planCompression,planRolling,reviewProposedClause,getKey,summaryInstructions} from './runtime.js';
 // 2026-11-18: the agency display session(s) are stateless (every round assembles its context afresh); the engine skips
 // optional folds and fold alignment there (externalSummary.statelessSessions).
 function statelessSessions(){try{const p=path.join(process.env.DSH_HOME||path.join(os.homedir(),'.dsh'),'censhu-inner-life','display-session.json'),d=JSON.parse(fs.readFileSync(p,'utf8'));return [...new Set([d.sessionId,d.previousSessionId].filter(x=>typeof x==='string'&&/^session-[0-9a-f-]{36}$/.test(x)))];}catch{return [];}}
@@ -257,7 +257,7 @@ function reply(res,status,data){res.writeHead(status,{'content-type':'applicatio
 export function settingsAction(input){
  if(!input||typeof input!=='object'||Array.isArray(input))throw Error('Invalid settings request');
  if(!Object.hasOwn(input,'action'))return 'save';
- if(['rollback-replay-policy','run-fixture-replay','restart-fixture-baseline','clear-learned-cases','retry-summary-provider'].includes(input.action))return input.action;
+ if(['rollback-replay-policy','run-fixture-replay','restart-fixture-baseline','clear-learned-cases','retry-summary-provider','clear-private-diagnostics'].includes(input.action))return input.action;
  throw Error('Unknown settings action');
 }
 // Operator examples remain separate from independently reviewed synthetic examples learned at runtime.
@@ -544,7 +544,9 @@ export function apply(ctx){
  }
  const providerHealth=createProviderHealth({read:()=>{try{return read(path.join(dataRoot,'summary-provider-health.json'));}catch(e){if(e.code==='ENOENT')return null;throw e;}},write:value=>write(path.join(dataRoot,'summary-provider-health.json'),value)});
  function summarize(work,c,signal,policy,onObservation,calibrationOptions={}){
-  if(!c.claudeEnabled||c.reviewEnabled)providerHealth.assert(c);
+  // 2026-11-20: a rolling run is written by Gemini and never calls module A, so a paused DeepSeek must not block it;
+  // generateA still checks before any real module-A call.
+  if(!(work.trigger==='rolling'&&c.rollingEnabled)&&(!c.claudeEnabled||c.reviewEnabled))providerHealth.assert(c);
   const input=withPolicy(work,policy);
   if(!calibrationOptions.calibration)input.reuseValidated=true;
   return runPipeline(input,(sig,selected)=>generateA(selected||input,sig,c),{signal,settings:c,onObservation,...calibrationOptions});
@@ -618,7 +620,7 @@ export function apply(ctx){
  ctx.effect(()=>ctx.webServer.register({kind:'exact',path:route+'/state',handler:async(req,res)=>{
   const host=req.headers.host||'',origin=req.headers.origin;
   if(!/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)||Number(host.slice(host.lastIndexOf(':')+1))!==req.socket.localPort||req.headers['sec-fetch-site']==='cross-site'||(origin&&origin!==`http://${host}`)){reply(res,403,{error:'Forbidden'});return;}
-  try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}const input=await body(req),action=settingsAction(input);if(!port)throw Error("Listener not ready");if(action==='retry-summary-provider'){providerHealth.clear(config());}else if(action==='run-fixture-replay'){void startFixture().catch(()=>{});}else if(action==='restart-fixture-baseline'){void startFixture('manual',{restartBaseline:true}).catch(()=>{});}else if(action==='rollback-replay-policy'){await rollback(input.version);}else if(action==='clear-learned-cases'){
+  try{if(req.method==='POST'){if(req.headers['x-dsh-compaction-csrf']!==csrf||req.headers['content-type']!=='application/json'){reply(res,403,{error:'Invalid settings token or content type'});return;}const input=await body(req),action=settingsAction(input);if(!port)throw Error("Listener not ready");if(action==='retry-summary-provider'){providerHealth.clear(config());}else if(action==='clear-private-diagnostics'){clearDiagnostics();}else if(action==='run-fixture-replay'){void startFixture().catch(()=>{});}else if(action==='restart-fixture-baseline'){void startFixture('manual',{restartBaseline:true}).catch(()=>{});}else if(action==='rollback-replay-policy'){await rollback(input.version);}else if(action==='clear-learned-cases'){
      if(replayJob||harvester.running)throw Error('请等待正在运行的学习或回放结束后再清空');
      await serialized(()=>kernelLock(learnedFile,()=>{
       if(disposed||replayJob||harvester.running||policyState().lease?.until>Date.now())throw Error('回放状态已变化，请刷新');
@@ -639,7 +641,7 @@ export function apply(ctx){
      });
      ready();
     }}else if(req.method!=='GET'){reply(res,405,{});return;}
-   reply(res,200,{config:config(),csrf,health,providerHealth:providerHealth.current(config()),engineReload,replay:replayState(),retrieval:retrievalPolicy(),runs:runs(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
+   reply(res,200,{config:config(),csrf,health,providerHealth:providerHealth.current(config()),engineReload,replay:replayState(),retrieval:retrievalPolicy(),runs:runs(),diagnostics:diagnosticsInfo(),influencedBy:['billion-context 范围、版本、工具配对与原文保留'],influences:['所有通过 billion-context 的 DSH 会话压缩；不改变对话模型、人设或记忆原文'],notice:'validated 仅表示模型摘要完成校验；提交与版本冲突由 billion-context 日志确认。A 使用 DSH 配置的 Provider；B 为 Claude 原生 compaction；审核为 Terra。'});
   }catch(e){reply(res,400,{error:e.message});}
  }}));
 }
